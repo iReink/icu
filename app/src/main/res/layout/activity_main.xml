@@ -1,14 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/mainContent"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/icu_screen_surface"
+    android:orientation="vertical">
 
-    <org.osmdroid.views.MapView
-        android:id="@+id/map"
+    <FrameLayout
+        android:id="@+id/contentHost"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <org.osmdroid.views.MapView
+            android:id="@+id/map"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
 
         <LinearLayout
             android:id="@+id/recordingPanel"
@@ -65,7 +73,7 @@
             android:layout_height="56dp"
             android:layout_gravity="bottom|start"
             android:layout_marginStart="24dp"
-            android:layout_marginBottom="128dp"
+            android:layout_marginBottom="24dp"
             android:contentDescription="@string/my_location"
             app:backgroundTint="@color/white"
             app:elevation="3dp"
@@ -80,7 +88,7 @@
             android:layout_height="72dp"
             android:layout_gravity="bottom|end"
             android:layout_marginEnd="24dp"
-            android:layout_marginBottom="120dp"
+            android:layout_marginBottom="16dp"
             android:contentDescription="@string/add_track"
             app:backgroundTint="@color/icu_purple_surface"
             app:elevation="6dp"
@@ -96,8 +104,7 @@
             android:background="@color/icu_screen_surface"
             android:elevation="16dp"
             android:orientation="vertical"
-            android:visibility="gone"
-            android:layout_marginBottom="88dp">
+            android:visibility="gone">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -146,17 +153,18 @@
                     android:paddingBottom="32dp" />
             </ScrollView>
         </LinearLayout>
+    </FrameLayout>
 
     <com.google.android.material.bottomnavigation.BottomNavigationView
         android:id="@+id/bottomNavigation"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
+        android:background="@color/icu_card_surface"
+        android:elevation="18dp"
         android:minHeight="80dp"
         android:paddingBottom="8dp"
-        android:background="@color/icu_card_surface"
         app:itemIconTint="@color/icu_text_primary"
         app:itemTextColor="@color/icu_text_primary"
         app:labelVisibilityMode="labeled"
         app:menu="@menu/bottom_nav_menu" />
-</FrameLayout>
+</LinearLayout>
