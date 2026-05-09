@@ -523,7 +523,9 @@ class MainActivity : AppCompatActivity() {
 
         header.addView(MaterialButton(this).apply {
             backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
             elevation = 0f
+            stateListAnimator = null
             minWidth = 0
             minimumWidth = 0
             minimumHeight = dp(40)

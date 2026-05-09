@@ -5,15 +5,14 @@
     android:viewportHeight="24">
     <path
         android:fillColor="@android:color/transparent"
-        android:pathData="M5.5,18.5a3.5,3.5 0,1 0,0,-7a3.5,3.5 0,0 0,0 7zM18.5,18.5a3.5,3.5 0,1 0,0,-7a3.5,3.5 0,0 0,0 7zM8.5,13.2L11,17h2l2.5,-5H12l-2,-3h3"
+        android:pathData="M5.5,18.5a3.5,3.5 0,1 1,0,-7a3.5,3.5 0,0 1,0,7zM18.5,18.5a3.5,3.5 0,1 1,0,-7a3.5,3.5 0,0 1,0,7z"
         android:strokeColor="@color/icu_text_primary"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
         android:strokeWidth="1.8" />
     <path
         android:fillColor="@android:color/transparent"
-        android:pathData="M14,7h2l1,2M10,9L7,16"
+        android:pathData="M5.5,15h4.2l2.3,-5h-3M12,10l3.2,5M9.7,15h5.5l2,-4M14,7h2M16,7l1.2,4M10,8l-2.2,7"
         android:strokeColor="@color/icu_text_primary"
         android:strokeLineCap="round"
+        android:strokeLineJoin="round"
         android:strokeWidth="1.8" />
 </vector>
