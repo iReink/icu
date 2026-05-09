@@ -64,6 +64,8 @@
     <string name="registration_success_message">Email подтверждён. Теперь можно войти и включить синхронизацию треков.</string>
     <string name="ok">Ок</string>
     <string name="auth_failed">Не удалось войти: %1$s</string>
+    <string name="rate_limit_message">Слишком много писем подтверждения за короткое время. Подождите и попробуйте позже. Для активного тестирования лучше подключить SMTP в Supabase.</string>
+    <string name="unknown_error">Неизвестная ошибка</string>
     <string name="sync_started">Синхронизация началась</string>
     <string name="sync_finished">Синхронизация завершена: выгружено %1$d, загружено %2$d</string>
     <string name="sync_failed">Не удалось синхронизировать: %1$s</string>

@@ -301,11 +301,30 @@ class SupabaseException(
     val statusCode: Int,
     message: String
 ) : Exception(message) {
+    private val errorJson = runCatching { JSONObject(message) }.getOrNull()
+
     fun isInvalidCredentials(): Boolean {
-        val lower = message.orEmpty().lowercase(Locale.US)
+        val lower = readableMessage().lowercase(Locale.US)
         return statusCode == 400 && (
             lower.contains("invalid login credentials") ||
                 lower.contains("invalid_credentials")
             )
+    }
+
+    fun isRateLimited(): Boolean {
+        val lower = readableMessage().lowercase(Locale.US)
+        return statusCode == 429 ||
+            lower.contains("rate limit") ||
+            lower.contains("too many")
+    }
+
+    fun readableMessage(): String {
+        return errorJson?.let { json ->
+            json.optString("msg")
+                .takeIf { it.isNotBlank() }
+                ?: json.optString("message").takeIf { it.isNotBlank() }
+                ?: json.optString("error_description").takeIf { it.isNotBlank() }
+                ?: json.optString("code").takeIf { it.isNotBlank() }
+        } ?: message.orEmpty()
     }
 }

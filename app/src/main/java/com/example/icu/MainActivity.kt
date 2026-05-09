@@ -23,7 +23,6 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -38,6 +37,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
+import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
 import com.google.android.material.textfield.TextInputEditText
@@ -338,7 +338,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkEmailAndShowPassword(email: String) {
-        Toast.makeText(this, R.string.checking_email, Toast.LENGTH_SHORT).show()
+        showSnackbar(getString(R.string.checking_email))
         backgroundExecutor.execute {
             runCatching {
                 supabaseClient.emailExists(email)
@@ -348,7 +348,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    Toast.makeText(this, getString(R.string.auth_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
+                    showSnackbar(getString(R.string.auth_failed, userMessage(error)), isLong = true)
                 }
             }
         }
@@ -379,7 +379,8 @@ class MainActivity : AppCompatActivity() {
         sectionContent.addView(authInputBlock(
             title = if (emailExists) getString(R.string.enter_password_title) else getString(R.string.create_password_title),
             input = passwordInput,
-            hint = getString(R.string.password)
+            hint = getString(R.string.password),
+            isPassword = true
         ))
 
         if (emailExists) {
@@ -423,7 +424,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    Toast.makeText(this, getString(R.string.auth_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
+                    showSnackbar(getString(R.string.auth_failed, userMessage(error)), isLong = true)
                 }
             }
         }
@@ -444,7 +445,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    Toast.makeText(this, getString(R.string.auth_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
+                    showSnackbar(getString(R.string.auth_failed, userMessage(error)), isLong = true)
                 }
             }
         }
@@ -513,7 +514,12 @@ class MainActivity : AppCompatActivity() {
         ))
     }
 
-    private fun authInputBlock(title: String, input: TextInputEditText, hint: String): View {
+    private fun authInputBlock(
+        title: String,
+        input: TextInputEditText,
+        hint: String,
+        isPassword: Boolean = false
+    ): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
@@ -530,6 +536,9 @@ class MainActivity : AppCompatActivity() {
                 this.hint = hint
                 boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
                 setBoxCornerRadii(dp(8).toFloat(), dp(8).toFloat(), dp(8).toFloat(), dp(8).toFloat())
+                if (isPassword) {
+                    endIconMode = TextInputLayout.END_ICON_PASSWORD_TOGGLE
+                }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -596,7 +605,7 @@ class MainActivity : AppCompatActivity() {
     private fun syncTracks(showToast: Boolean) {
         if (sessionStore.current() == null) return
         if (showToast) {
-            Toast.makeText(this, R.string.sync_started, Toast.LENGTH_SHORT).show()
+            showSnackbar(getString(R.string.sync_started))
         }
         backgroundExecutor.execute {
             runCatching {
@@ -607,17 +616,16 @@ class MainActivity : AppCompatActivity() {
                     loadSavedTracks()
                     showTracksScreenIfVisible()
                     if (showToast) {
-                        Toast.makeText(
-                            this,
+                        showSnackbar(
                             getString(R.string.sync_finished, result.uploaded, result.downloaded),
-                            Toast.LENGTH_LONG
-                        ).show()
+                            isLong = true
+                        )
                     }
                 }
             }.onFailure { error ->
                 runOnUiThread {
                     if (showToast) {
-                        Toast.makeText(this, getString(R.string.sync_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
+                        showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
                     }
                 }
             }
@@ -627,6 +635,29 @@ class MainActivity : AppCompatActivity() {
     private fun showTracksScreenIfVisible() {
         if (sectionPanel.visibility == View.VISIBLE && currentSection == Section.TRACKS) {
             showTracksScreen()
+        }
+    }
+
+    private fun showSnackbar(message: String, isLong: Boolean = false) {
+        val root = findViewById<View>(R.id.mainContent)
+        Snackbar.make(
+            root,
+            message,
+            if (isLong) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
+        ).apply {
+            anchorView = when {
+                sectionPanel.visibility == View.VISIBLE -> null
+                addTrackFab.visibility == View.VISIBLE -> addTrackFab
+                else -> null
+            }
+        }.show()
+    }
+
+    private fun userMessage(error: Throwable): String {
+        return when {
+            error is SupabaseException && error.isRateLimited() -> getString(R.string.rate_limit_message)
+            error is SupabaseException -> error.readableMessage()
+            else -> error.message ?: getString(R.string.unknown_error)
         }
     }
 
@@ -649,7 +680,7 @@ class MainActivity : AppCompatActivity() {
             requestStartRecording(TrackType.BIKE)
         }
         content.findViewById<MaterialButton>(R.id.uploadTrackButton).setOnClickListener {
-            Toast.makeText(this, R.string.gpx_upload_mock, Toast.LENGTH_SHORT).show()
+            showSnackbar(getString(R.string.gpx_upload_mock))
         }
 
         addTrackSheet = sheet
@@ -658,7 +689,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestStartRecording(type: TrackType) {
         if (TrackRecordingService.currentState.isRecording) {
-            Toast.makeText(this, R.string.recording_already_started, Toast.LENGTH_SHORT).show()
+            showSnackbar(getString(R.string.recording_already_started))
             return
         }
 
@@ -1084,7 +1115,7 @@ class MainActivity : AppCompatActivity() {
             contentDescription = getString(R.string.high_accuracy_tooltip)
             TooltipCompat.setTooltipText(this, getString(R.string.high_accuracy_tooltip))
             setOnClickListener {
-                Toast.makeText(this@MainActivity, R.string.high_accuracy_tooltip, Toast.LENGTH_LONG).show()
+                showSnackbar(getString(R.string.high_accuracy_tooltip), isLong = true)
             }
             layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
         })
