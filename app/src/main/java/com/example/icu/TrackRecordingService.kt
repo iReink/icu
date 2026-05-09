@@ -84,7 +84,7 @@ class TrackRecordingService : Service() {
         )
 
         startAsForeground()
-        requestLocationUpdates(provider)
+        requestLocationUpdates(provider, type)
         broadcastStateChanged()
     }
 
@@ -110,11 +110,11 @@ class TrackRecordingService : Service() {
         stopSelf()
     }
 
-    private fun requestLocationUpdates(provider: String) {
+    private fun requestLocationUpdates(provider: String, type: TrackType) {
         try {
             locationManager.requestLocationUpdates(
                 provider,
-                LOCATION_INTERVAL_MS,
+                recordingIntervalMs(type),
                 0f,
                 locationListener
             )
@@ -177,6 +177,14 @@ class TrackRecordingService : Service() {
             locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
             locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
             else -> null
+        }
+    }
+
+    private fun recordingIntervalMs(type: TrackType): Long {
+        if (RecordingPreferences.isHighAccuracyEnabled(this)) return HIGH_ACCURACY_INTERVAL_MS
+        return when (type) {
+            TrackType.WALK -> WALK_INTERVAL_MS
+            TrackType.BIKE -> BIKE_INTERVAL_MS
         }
     }
 
@@ -276,7 +284,9 @@ class TrackRecordingService : Service() {
         const val ACTION_STOP = "com.example.icu.action.STOP_RECORDING"
         const val ACTION_STATE_CHANGED = "com.example.icu.action.RECORDING_STATE_CHANGED"
         const val EXTRA_TRACK_TYPE = "track_type"
-        const val LOCATION_INTERVAL_MS = 5_000L
+        const val HIGH_ACCURACY_INTERVAL_MS = 1_000L
+        const val WALK_INTERVAL_MS = 3_000L
+        const val BIKE_INTERVAL_MS = 2_000L
         const val MAX_ACCEPTED_ACCURACY_METERS = 50f
         const val MIN_DISTANCE_FOR_DISTANCE_METERS = 3f
 

@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
@@ -27,15 +28,19 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.PopupMenu
+import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
+import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
 import com.google.android.material.tabs.TabLayout
+import com.google.android.material.tabs.TabLayoutMediator
+import androidx.viewpager2.widget.ViewPager2
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -72,6 +77,7 @@ class MainActivity : AppCompatActivity() {
     private var savedTrackOverlays = mutableListOf<Polyline>()
     private var activeTrackPolyline: Polyline? = null
     private var isReceiverRegistered = false
+    private var shouldFollowLocation = true
 
     private val elapsedHandler = Handler(Looper.getMainLooper())
     private val elapsedTicker = object : Runnable {
@@ -87,7 +93,7 @@ class MainActivity : AppCompatActivity() {
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
 
             if (isGranted) {
-                enableMyLocation()
+                enableMyLocation(follow = shouldFollowLocation)
                 continuePendingRecordingStart()
             } else {
                 pendingStartType = null
@@ -124,7 +130,7 @@ class MainActivity : AppCompatActivity() {
         syncRecordingState()
 
         if (hasLocationPermission()) {
-            enableMyLocation()
+            enableMyLocation(follow = true)
         } else {
             requestLocationPermission()
         }
@@ -145,6 +151,9 @@ class MainActivity : AppCompatActivity() {
         map.onResume()
         registerRecordingReceiver()
         locationOverlay?.enableMyLocation()
+        if (shouldFollowLocation) {
+            locationOverlay?.enableFollowLocation()
+        }
         loadSavedTracks()
         syncRecordingState()
     }
@@ -182,6 +191,12 @@ class MainActivity : AppCompatActivity() {
         val startPoint = GeoPoint(56.8389, 60.6057)
         map.controller.setZoom(15.0)
         map.controller.setCenter(startPoint)
+        map.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_MOVE) {
+                disableLocationFollow()
+            }
+            false
+        }
     }
 
     private fun setupDrawer() {
@@ -190,6 +205,7 @@ class MainActivity : AppCompatActivity() {
             when (item.itemId) {
                 R.id.menuMyTracks -> showTracksScreen()
                 R.id.menuStatistics -> showStatisticsScreen()
+                R.id.menuSettings -> showSettingsScreen()
             }
             true
         }
@@ -202,7 +218,7 @@ class MainActivity : AppCompatActivity() {
 
         myLocationButton.setOnClickListener {
             if (hasLocationPermission()) {
-                enableMyLocation()
+                enableMyLocation(follow = true)
             } else {
                 requestLocationPermission()
             }
@@ -339,7 +355,9 @@ class MainActivity : AppCompatActivity() {
         polyline.setPoints(state.points.map { it.toGeoPoint() })
 
         state.points.lastOrNull()?.let { point ->
-            map.controller.animateTo(point.toGeoPoint())
+            if (shouldFollowLocation) {
+                map.controller.animateTo(point.toGeoPoint())
+            }
         }
     }
 
@@ -369,6 +387,7 @@ class MainActivity : AppCompatActivity() {
     private fun showTracksScreen() {
         val tracks = trackStore.loadTracks()
         showSection(getString(R.string.my_tracks))
+        setSectionContentPadding(horizontalDp = 20)
 
         if (tracks.isEmpty()) {
             sectionContent.addView(emptyStateText(getString(R.string.no_tracks)))
@@ -388,47 +407,40 @@ class MainActivity : AppCompatActivity() {
     private fun showStatisticsScreen() {
         val tracks = trackStore.loadTracks()
         showSection(getString(R.string.statistics))
-        sectionContent.addView(statSummaryCard(tracks))
+        setSectionContentPadding(horizontalDp = 0)
+
+        val pages = listOf(
+            StatsPage(getString(R.string.all), null, ContextCompat.getColor(this, R.color.icu_purple_ink)),
+            StatsPage(TrackType.WALK.title, TrackType.WALK, TrackType.WALK.color),
+            StatsPage(TrackType.BIKE.title, TrackType.BIKE, TrackType.BIKE.color)
+        )
 
         val tabs = TabLayout(this).apply {
-            addTab(newTab().setText(TrackType.WALK.title).setTag(TrackType.WALK))
-            addTab(newTab().setText(TrackType.BIKE.title).setTag(TrackType.BIKE))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(8)
-                bottomMargin = dp(12)
-            }
-        }
-        val tabContent = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            tabMode = TabLayout.MODE_FIXED
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-
-        fun renderTab(type: TrackType) {
-            val activityTracks = tracks.filter { it.type == type }
-            tabContent.removeAllViews()
-            tabContent.addView(activityStatsCard(type, activityTracks))
-            tabContent.addView(activityCalendarCard(type, activityTracks))
-            tabContent.addView(monthlyDistanceCard(type, activityTracks))
+        val pager = ViewPager2(this).apply {
+            adapter = StatsPagerAdapter(pages, tracks)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                (resources.displayMetrics.heightPixels - dp(154)).coerceAtLeast(dp(420))
+            )
         }
 
-        tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab) {
-                renderTab(tab.tag as TrackType)
-            }
-
-            override fun onTabUnselected(tab: TabLayout.Tab) = Unit
-            override fun onTabReselected(tab: TabLayout.Tab) = Unit
-        })
-
         sectionContent.addView(tabs)
-        sectionContent.addView(tabContent)
-        renderTab(TrackType.WALK)
+        sectionContent.addView(pager)
+        TabLayoutMediator(tabs, pager) { tab, position ->
+            tab.text = pages[position].title
+        }.attach()
+    }
+
+    private fun showSettingsScreen() {
+        showSection(getString(R.string.settings))
+        setSectionContentPadding(horizontalDp = 20)
+        sectionContent.addView(settingsRow())
     }
 
     private fun showSection(title: String) {
@@ -446,6 +458,10 @@ class MainActivity : AppCompatActivity() {
         sectionPanel.visibility = View.GONE
         drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
         syncRecordingState()
+    }
+
+    private fun setSectionContentPadding(horizontalDp: Int) {
+        sectionContent.setPadding(dp(horizontalDp), 0, dp(horizontalDp), dp(32))
     }
 
     private fun groupTitle(title: String): TextView {
@@ -618,15 +634,67 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun statSummaryCard(tracks: List<RecordedTrack>): View {
-        return statsCard(
-            title = getString(R.string.all_time),
-            primary = formatDistance(tracks.sumOf { it.distanceMeters.toDouble() }.toFloat()),
-            secondary = "${tracks.size} треков · ${formatDuration(tracks.sumOf { it.durationMillis })}"
-        )
+    private fun settingsRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.bg_content_card)
+            setPadding(dp(16), dp(12), dp(12), dp(12))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        row.addView(TextView(this).apply {
+            text = getString(R.string.high_accuracy)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        row.addView(MaterialButton(this).apply {
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            elevation = 0f
+            stateListAnimator = null
+            minWidth = 0
+            minimumWidth = 0
+            minimumHeight = dp(40)
+            setPadding(0, 0, 0, 0)
+            setIconResource(R.drawable.ic_info)
+            iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_text_secondary)
+            contentDescription = getString(R.string.high_accuracy_tooltip)
+            TooltipCompat.setTooltipText(this, getString(R.string.high_accuracy_tooltip))
+            setOnClickListener {
+                Toast.makeText(this@MainActivity, R.string.high_accuracy_tooltip, Toast.LENGTH_LONG).show()
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+        })
+        row.addView(com.google.android.material.switchmaterial.SwitchMaterial(this).apply {
+            isChecked = RecordingPreferences.isHighAccuracyEnabled(this@MainActivity)
+            setOnCheckedChangeListener { _, checked ->
+                RecordingPreferences.setHighAccuracyEnabled(this@MainActivity, checked)
+            }
+        })
+        return row
     }
 
-    private fun activityStatsCard(type: TrackType, activityTracks: List<RecordedTrack>): View {
+    private fun statsPageView(page: StatsPage, allTracks: List<RecordedTrack>): View {
+        val pageTracks = page.type?.let { type -> allTracks.filter { it.type == type } } ?: allTracks
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(32))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            addView(activityStatsCard(page, pageTracks))
+            addView(activityCalendarCard(page, pageTracks))
+            addView(monthlyDistanceCard(page, pageTracks))
+        }
+    }
+
+    private fun activityStatsCard(page: StatsPage, activityTracks: List<RecordedTrack>): View {
         val currentMonth = YearMonth.now()
         val monthTracks = activityTracks.filter { GpxTrackStore.monthKey(it) == currentMonth }
         val longestTrack = activityTracks.maxByOrNull { it.distanceMeters }
@@ -636,21 +704,21 @@ class MainActivity : AppCompatActivity() {
             " · лучший: ${formatDistance(longestTrack?.distanceMeters ?: 0f)}"
 
         return statsCard(
-            title = "Итого: ${type.title.lowercase(Locale.forLanguageTag("ru-RU"))}",
+            title = "Итого: ${page.title.lowercase(Locale.forLanguageTag("ru-RU"))}",
             primary = formatDistance(activityTracks.sumOf { it.distanceMeters.toDouble() }.toFloat()),
             secondary = secondary,
-            accentColor = type.color
+            accentColor = page.accentColor
         )
     }
 
-    private fun activityCalendarCard(type: TrackType, tracks: List<RecordedTrack>): View {
+    private fun activityCalendarCard(page: StatsPage, tracks: List<RecordedTrack>): View {
         val activeDates = tracks
             .map { Instant.ofEpochMilli(it.startedAtMillis).atZone(ZoneId.systemDefault()).toLocalDate() }
             .toSet()
         val dates = (27 downTo 0).map { LocalDate.now().minusDays(it.toLong()) }
 
         val card = contentCard()
-        card.addView(cardTitle("Календарь активности", type.color))
+        card.addView(cardTitle("Календарь активности", page.accentColor))
         dates.chunked(7).forEach { week ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -668,7 +736,7 @@ class MainActivity : AppCompatActivity() {
                     textSize = if (date in activeDates) 24f else 28f
                     setTextColor(
                         if (date in activeDates) {
-                            type.color
+                            page.accentColor
                         } else {
                             ContextCompat.getColor(this@MainActivity, R.color.icu_sheet_divider)
                         }
@@ -681,7 +749,7 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
-    private fun monthlyDistanceCard(type: TrackType, tracks: List<RecordedTrack>): View {
+    private fun monthlyDistanceCard(page: StatsPage, tracks: List<RecordedTrack>): View {
         val months = (5 downTo 0).map { YearMonth.now().minusMonths(it.toLong()) }
         val distances = months.associateWith { month ->
             tracks
@@ -692,7 +760,7 @@ class MainActivity : AppCompatActivity() {
         val maxDistance = distances.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f
 
         val card = contentCard()
-        card.addView(cardTitle("Километраж по месяцам", type.color))
+        card.addView(cardTitle("Километраж по месяцам", page.accentColor))
         months.forEach { month ->
             val distance = distances.getValue(month)
             val row = LinearLayout(this).apply {
@@ -712,7 +780,7 @@ class MainActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.WRAP_CONTENT)
             })
             row.addView(View(this).apply {
-                setBackgroundColor(type.color)
+                setBackgroundColor(page.accentColor)
                 alpha = if (distance > 0f) 1f else 0.18f
                 layoutParams = LinearLayout.LayoutParams(
                     0,
@@ -803,18 +871,23 @@ class MainActivity : AppCompatActivity() {
         isReceiverRegistered = false
     }
 
-    private fun enableMyLocation() {
+    private fun enableMyLocation(follow: Boolean = shouldFollowLocation) {
         if (!hasLocationPermission()) return
+        shouldFollowLocation = follow
 
         if (locationOverlay == null) {
             locationOverlay = MyLocationNewOverlay(GpsMyLocationProvider(this), map).also { overlay ->
                 overlay.enableMyLocation()
-                overlay.enableFollowLocation()
+                if (shouldFollowLocation) {
+                    overlay.enableFollowLocation()
+                }
                 overlay.runOnFirstFix {
                     runOnUiThread {
                         overlay.myLocation?.let { location ->
-                            map.controller.animateTo(location)
-                            map.controller.setZoom(17.0)
+                            if (shouldFollowLocation) {
+                                map.controller.animateTo(location)
+                                map.controller.setZoom(17.0)
+                            }
                         }
                     }
                 }
@@ -822,10 +895,18 @@ class MainActivity : AppCompatActivity() {
             }
         } else {
             locationOverlay?.enableMyLocation()
-            locationOverlay?.enableFollowLocation()
+            if (shouldFollowLocation) {
+                locationOverlay?.enableFollowLocation()
+            }
         }
 
         map.invalidate()
+    }
+
+    private fun disableLocationFollow() {
+        if (!shouldFollowLocation) return
+        shouldFollowLocation = false
+        locationOverlay?.disableFollowLocation()
     }
 
     private fun hasLocationPermission(): Boolean {
@@ -898,6 +979,36 @@ class MainActivity : AppCompatActivity() {
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
     }
+
+    private data class StatsPage(
+        val title: String,
+        val type: TrackType?,
+        val accentColor: Int
+    )
+
+    private inner class StatsPagerAdapter(
+        private val pages: List<StatsPage>,
+        private val tracks: List<RecordedTrack>
+    ) : RecyclerView.Adapter<StatsPageHolder>() {
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): StatsPageHolder {
+            val container = FrameLayout(parent.context).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            }
+            return StatsPageHolder(container)
+        }
+
+        override fun onBindViewHolder(holder: StatsPageHolder, position: Int) {
+            holder.container.removeAllViews()
+            holder.container.addView(statsPageView(pages[position], tracks))
+        }
+
+        override fun getItemCount(): Int = pages.size
+    }
+
+    private class StatsPageHolder(val container: FrameLayout) : RecyclerView.ViewHolder(container)
 
     companion object {
         private const val TRACK_ACTION_RENAME = 1

@@ -41,6 +41,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.drawerlayout)
+    implementation(libs.androidx.viewpager2)
     implementation(libs.material)
     implementation(libs.osmdroid.android)
     testImplementation(libs.junit)
