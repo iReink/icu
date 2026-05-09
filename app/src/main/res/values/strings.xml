@@ -1,4 +1,17 @@
 <resources>
     <string name="app_name">ICU</string>
     <string name="my_location">Моя позиция</string>
+    <string name="add_track">Добавить трек</string>
+    <string name="walk">Пешком</string>
+    <string name="bike">Велосипед</string>
+    <string name="upload">Загрузить</string>
+    <string name="finish_recording">Завершить</string>
+    <string name="zero_distance">0,00 км</string>
+    <string name="zero_duration">00:00</string>
+    <string name="gpx_upload_mock">Загрузка GPX будет добавлена позже</string>
+    <string name="recording_already_started">Запись трека уже идёт</string>
+    <string name="track_without_points">Трек не сохранён: нет GPS-точек</string>
+    <string name="track_saved">Трек сохранён: %1$s</string>
+    <string name="location_provider_disabled">Включи геолокацию на устройстве</string>
+    <string name="location_permission_denied">Нет разрешения на геолокацию</string>
 </resources>

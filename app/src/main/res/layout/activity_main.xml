@@ -9,15 +9,82 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/myLocationButton"
-        style="@style/Widget.MaterialComponents.Button"
+    <LinearLayout
+        android:id="@+id/recordingPanel"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="40dp"
+        android:layout_marginEnd="24dp"
+        android:background="@drawable/bg_recording_panel"
+        android:gravity="center"
+        android:minHeight="72dp"
+        android:orientation="horizontal"
+        android:paddingStart="28dp"
+        android:paddingEnd="20dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/distanceText"
+            android:layout_width="104dp"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="@string/zero_distance"
+            android:textColor="@color/icu_text_primary"
+            android:textSize="20sp" />
+
+        <TextView
+            android:id="@+id/durationText"
+            android:layout_width="104dp"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="@string/zero_duration"
+            android:textColor="@color/icu_text_primary"
+            android:textSize="20sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/finishRecordingButton"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:minWidth="0dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="@string/finish_recording"
+            android:textAllCaps="false"
+            android:textColor="@color/icu_purple_ink"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/myLocationButton"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="bottom|start"
+        android:layout_marginStart="24dp"
+        android:layout_marginBottom="32dp"
+        android:contentDescription="@string/my_location"
+        app:backgroundTint="@color/white"
+        app:elevation="3dp"
+        app:fabCustomSize="56dp"
+        app:maxImageSize="30dp"
+        app:srcCompat="@drawable/ic_my_location"
+        app:tint="@color/black" />
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/addTrackFab"
+        android:layout_width="72dp"
+        android:layout_height="72dp"
         android:layout_gravity="bottom|end"
-        android:layout_margin="16dp"
-        android:minHeight="48dp"
-        android:text="@string/my_location"
-        app:icon="@android:drawable/ic_menu_mylocation"
-        app:iconGravity="textStart" />
+        android:layout_marginEnd="24dp"
+        android:layout_marginBottom="32dp"
+        android:contentDescription="@string/add_track"
+        app:backgroundTint="@color/icu_purple_surface"
+        app:elevation="6dp"
+        app:fabCustomSize="72dp"
+        app:maxImageSize="36dp"
+        app:srcCompat="@drawable/ic_plus_circle"
+        app:tint="@color/icu_purple_ink" />
 </FrameLayout>
