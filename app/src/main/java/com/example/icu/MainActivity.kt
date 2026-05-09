@@ -1,101 +1,81 @@
 package com.example.icu
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.util.Xml
+import android.text.InputType
+import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.GravityCompat
+import androidx.drawerlayout.widget.DrawerLayout
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
+import com.google.android.material.navigation.NavigationView
+import com.google.android.material.switchmaterial.SwitchMaterial
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
 import org.osmdroid.views.CustomZoomButtonsController
+import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
-import org.xmlpull.v1.XmlPullParser
-import java.io.File
 import java.time.Instant
+import java.time.YearMonth
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
-import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
-    private enum class TrackType(
-        val gpxType: String,
-        val title: String,
-        val color: Int
-    ) {
-        WALK("walk", "Пешком", Color.BLACK),
-        BIKE("bike", "Велосипед", Color.rgb(47, 91, 209));
-
-        companion object {
-            fun fromGpxType(value: String?): TrackType {
-                return entries.firstOrNull { it.gpxType == value } ?: WALK
-            }
-        }
-    }
-
-    private data class TrackPoint(
-        val latitude: Double,
-        val longitude: Double,
-        val altitude: Double?,
-        val timeMillis: Long
-    ) {
-        fun toGeoPoint(): GeoPoint = GeoPoint(latitude, longitude)
-    }
-
-    private data class RecordedTrack(
-        val type: TrackType,
-        val points: List<TrackPoint>,
-        val distanceMeters: Float,
-        val startedAtMillis: Long,
-        val file: File
-    )
-
+    private lateinit var drawerLayout: DrawerLayout
+    private lateinit var navigationView: NavigationView
     private lateinit var map: MapView
     private lateinit var recordingPanel: View
     private lateinit var distanceText: TextView
     private lateinit var durationText: TextView
     private lateinit var addTrackFab: FloatingActionButton
     private lateinit var myLocationButton: FloatingActionButton
-    private lateinit var locationManager: LocationManager
+    private lateinit var menuButton: FloatingActionButton
+    private lateinit var sectionPanel: LinearLayout
+    private lateinit var sectionTitle: TextView
+    private lateinit var sectionContent: LinearLayout
+    private lateinit var trackStore: GpxTrackStore
 
     private var locationOverlay: MyLocationNewOverlay? = null
     private var addTrackSheet: BottomSheetDialog? = null
     private var pendingStartType: TrackType? = null
-    private var recordingType: TrackType? = null
-    private var recordingStartedAtMillis: Long = 0L
-    private var recordingDistanceMeters: Float = 0f
-    private var recordingPoints = mutableListOf<TrackPoint>()
-    private var recordingPolyline: Polyline? = null
+    private var savedTrackOverlays = mutableListOf<Polyline>()
+    private var activeTrackPolyline: Polyline? = null
+    private var isReceiverRegistered = false
 
     private val elapsedHandler = Handler(Looper.getMainLooper())
     private val elapsedTicker = object : Runnable {
         override fun run() {
-            updateRecordingPanel()
+            updateRecordingPanelTime()
             elapsedHandler.postDelayed(this, TIMER_INTERVAL_MS)
         }
-    }
-
-    private val trackLocationListener = LocationListener { location ->
-        addRecordingLocation(location)
     }
 
     private val locationPermissionLauncher =
@@ -105,73 +85,84 @@ class MainActivity : AppCompatActivity() {
 
             if (isGranted) {
                 enableMyLocation()
-                pendingStartType?.let { type ->
-                    pendingStartType = null
-                    startRecording(type)
-                }
+                continuePendingRecordingStart()
+            } else {
+                pendingStartType = null
             }
         }
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            startPendingRecording()
+        }
+
+    private val recordingStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            syncRecordingState()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         Configuration.getInstance().userAgentValue = packageName
+        trackStore = GpxTrackStore(this)
         setContentView(R.layout.activity_main)
 
-        locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        map = findViewById(R.id.map)
-        recordingPanel = findViewById(R.id.recordingPanel)
-        distanceText = findViewById(R.id.distanceText)
-        durationText = findViewById(R.id.durationText)
-        addTrackFab = findViewById(R.id.addTrackFab)
-        myLocationButton = findViewById(R.id.myLocationButton)
-
+        bindViews()
         setupMap()
+        setupDrawer()
+        setupActions()
         loadSavedTracks()
-
-        myLocationButton.setOnClickListener {
-            if (hasLocationPermission()) {
-                enableMyLocation()
-            } else {
-                requestLocationPermission()
-            }
-        }
-
-        addTrackFab.setOnClickListener {
-            showAddTrackSheet()
-        }
-
-        findViewById<MaterialButton>(R.id.finishRecordingButton).setOnClickListener {
-            finishRecording()
-        }
+        syncRecordingState()
 
         if (hasLocationPermission()) {
             enableMyLocation()
         } else {
             requestLocationPermission()
         }
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                when {
+                    sectionPanel.visibility == View.VISIBLE -> hideSection()
+                    drawerLayout.isDrawerOpen(GravityCompat.END) -> drawerLayout.closeDrawer(GravityCompat.END)
+                    else -> finish()
+                }
+            }
+        })
     }
 
     override fun onResume() {
         super.onResume()
         map.onResume()
+        registerRecordingReceiver()
         locationOverlay?.enableMyLocation()
-        if (recordingType != null) {
-            elapsedHandler.post(elapsedTicker)
-        }
+        loadSavedTracks()
+        syncRecordingState()
     }
 
     override fun onPause() {
         locationOverlay?.disableMyLocation()
-        elapsedHandler.removeCallbacks(elapsedTicker)
+        unregisterRecordingReceiver()
         map.onPause()
         super.onPause()
+        elapsedHandler.removeCallbacks(elapsedTicker)
     }
 
-    override fun onDestroy() {
-        stopLocationUpdates()
-        elapsedHandler.removeCallbacks(elapsedTicker)
-        super.onDestroy()
+    private fun bindViews() {
+        drawerLayout = findViewById(R.id.drawerLayout)
+        navigationView = findViewById(R.id.navigationView)
+        map = findViewById(R.id.map)
+        recordingPanel = findViewById(R.id.recordingPanel)
+        distanceText = findViewById(R.id.distanceText)
+        durationText = findViewById(R.id.durationText)
+        addTrackFab = findViewById(R.id.addTrackFab)
+        myLocationButton = findViewById(R.id.myLocationButton)
+        menuButton = findViewById(R.id.menuButton)
+        sectionPanel = findViewById(R.id.sectionPanel)
+        sectionTitle = findViewById(R.id.sectionTitle)
+        sectionContent = findViewById(R.id.sectionContent)
     }
 
     private fun setupMap() {
@@ -186,29 +177,41 @@ class MainActivity : AppCompatActivity() {
         map.controller.setCenter(startPoint)
     }
 
-    private fun enableMyLocation() {
-        if (!hasLocationPermission()) return
-
-        if (locationOverlay == null) {
-            locationOverlay = MyLocationNewOverlay(GpsMyLocationProvider(this), map).also { overlay ->
-                overlay.enableMyLocation()
-                overlay.enableFollowLocation()
-                overlay.runOnFirstFix {
-                    runOnUiThread {
-                        overlay.myLocation?.let { location ->
-                            map.controller.animateTo(location)
-                            map.controller.setZoom(17.0)
-                        }
-                    }
-                }
-                map.overlays.add(overlay)
+    private fun setupDrawer() {
+        navigationView.setNavigationItemSelectedListener { item ->
+            drawerLayout.closeDrawer(GravityCompat.END)
+            when (item.itemId) {
+                R.id.menuMyTracks -> showTracksScreen()
+                R.id.menuStatistics -> showStatisticsScreen()
             }
-        } else {
-            locationOverlay?.enableMyLocation()
-            locationOverlay?.enableFollowLocation()
+            true
+        }
+    }
+
+    private fun setupActions() {
+        menuButton.setOnClickListener {
+            drawerLayout.openDrawer(GravityCompat.END)
         }
 
-        map.invalidate()
+        myLocationButton.setOnClickListener {
+            if (hasLocationPermission()) {
+                enableMyLocation()
+            } else {
+                requestLocationPermission()
+            }
+        }
+
+        addTrackFab.setOnClickListener {
+            showAddTrackSheet()
+        }
+
+        findViewById<MaterialButton>(R.id.finishRecordingButton).setOnClickListener {
+            stopRecordingService()
+        }
+
+        findViewById<MaterialButton>(R.id.closeSectionButton).setOnClickListener {
+            hideSection()
+        }
     }
 
     private fun showAddTrackSheet() {
@@ -238,169 +241,110 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestStartRecording(type: TrackType) {
-        if (recordingType != null) {
+        if (TrackRecordingService.currentState.isRecording) {
             Toast.makeText(this, R.string.recording_already_started, Toast.LENGTH_SHORT).show()
             return
         }
 
-        if (hasLocationPermission()) {
-            startRecording(type)
-        } else {
-            pendingStartType = type
+        pendingStartType = type
+
+        if (!hasLocationPermission()) {
             requestLocationPermission()
+            return
         }
+
+        if (!hasNotificationPermission()) {
+            requestNotificationPermission()
+            return
+        }
+
+        startPendingRecording()
     }
 
-    private fun startRecording(type: TrackType) {
+    private fun continuePendingRecordingStart() {
+        if (!hasLocationPermission()) return
+        if (!hasNotificationPermission()) {
+            requestNotificationPermission()
+            return
+        }
+
+        startPendingRecording()
+    }
+
+    private fun startPendingRecording() {
+        val type = pendingStartType ?: return
         if (!hasLocationPermission()) return
 
-        recordingType = type
-        recordingStartedAtMillis = System.currentTimeMillis()
-        recordingDistanceMeters = 0f
-        recordingPoints = mutableListOf()
-
-        recordingPolyline = createTrackPolyline(type).also { polyline ->
-            map.overlays.add(polyline)
+        pendingStartType = null
+        val intent = Intent(this, TrackRecordingService::class.java).apply {
+            action = TrackRecordingService.ACTION_START
+            putExtra(TrackRecordingService.EXTRA_TRACK_TYPE, type.gpxType)
         }
-
-        if (!startLocationUpdates()) {
-            recordingType = null
-            recordingPolyline?.let { map.overlays.remove(it) }
-            recordingPolyline = null
-            recordingPoints = mutableListOf()
-            map.invalidate()
-            return
-        }
-
-        recordingPanel.visibility = View.VISIBLE
-        addTrackFab.visibility = View.GONE
-        updateRecordingPanel()
-        elapsedHandler.removeCallbacks(elapsedTicker)
-        elapsedHandler.post(elapsedTicker)
+        ContextCompat.startForegroundService(this, intent)
     }
 
-    private fun finishRecording() {
-        val type = recordingType ?: return
-        stopLocationUpdates()
-        elapsedHandler.removeCallbacks(elapsedTicker)
+    private fun stopRecordingService() {
+        val intent = Intent(this, TrackRecordingService::class.java).apply {
+            action = TrackRecordingService.ACTION_STOP
+        }
+        startService(intent)
+    }
 
-        val points = recordingPoints.toList()
-        val polyline = recordingPolyline
-        recordingType = null
-        recordingPolyline = null
-        recordingPoints = mutableListOf()
-        recordingPanel.visibility = View.GONE
-        addTrackFab.visibility = View.VISIBLE
+    private fun syncRecordingState() {
+        val state = TrackRecordingService.currentState
+        val isRecording = state.isRecording
 
-        if (points.isEmpty()) {
-            polyline?.let { map.overlays.remove(it) }
-            map.invalidate()
-            Toast.makeText(this, R.string.track_without_points, Toast.LENGTH_SHORT).show()
-            return
+        recordingPanel.visibility = if (isRecording) View.VISIBLE else View.GONE
+        addTrackFab.visibility = if (isRecording) View.GONE else View.VISIBLE
+        menuButton.visibility = if (isRecording) View.GONE else View.VISIBLE
+
+        if (isRecording) {
+            updateRecordingPanelTime()
+            drawActiveTrack(state)
+            elapsedHandler.removeCallbacks(elapsedTicker)
+            elapsedHandler.post(elapsedTicker)
+        } else {
+            elapsedHandler.removeCallbacks(elapsedTicker)
+            activeTrackPolyline?.let { map.overlays.remove(it) }
+            activeTrackPolyline = null
+            loadSavedTracks()
         }
 
-        val file = saveTrackAsGpx(type, points, recordingDistanceMeters, recordingStartedAtMillis)
-        Toast.makeText(this, getString(R.string.track_saved, file.name), Toast.LENGTH_SHORT).show()
         map.invalidate()
     }
 
-    private fun startLocationUpdates(): Boolean {
-        if (!hasLocationPermission()) return false
-
-        val provider = when {
-            locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-            locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            else -> null
-        }
-
-        if (provider == null) {
-            Toast.makeText(this, R.string.location_provider_disabled, Toast.LENGTH_LONG).show()
-            return false
-        }
-
-        try {
-            locationManager.requestLocationUpdates(
-                provider,
-                LOCATION_INTERVAL_MS,
-                0f,
-                trackLocationListener
-            )
-            locationManager.getLastKnownLocation(provider)?.let { addRecordingLocation(it) }
-        } catch (securityException: SecurityException) {
-            Toast.makeText(this, R.string.location_permission_denied, Toast.LENGTH_SHORT).show()
-            return false
-        }
-
-        return true
+    private fun updateRecordingPanelTime() {
+        val state = TrackRecordingService.currentState
+        if (!state.isRecording) return
+        distanceText.text = formatDistance(state.distanceMeters)
+        durationText.text = formatDuration((System.currentTimeMillis() - state.startedAtMillis).coerceAtLeast(0L))
     }
 
-    private fun stopLocationUpdates() {
-        locationManager.removeUpdates(trackLocationListener)
-    }
-
-    private fun addRecordingLocation(location: Location) {
-        val type = recordingType ?: return
-        if (!isUsableTrackLocation(location)) return
-
-        val point = TrackPoint(
-            latitude = location.latitude,
-            longitude = location.longitude,
-            altitude = if (location.hasAltitude()) location.altitude else null,
-            timeMillis = location.time
-        )
-
-        val previous = recordingPoints.lastOrNull()
-        if (previous != null) {
-            val distance = FloatArray(1)
-            Location.distanceBetween(
-                previous.latitude,
-                previous.longitude,
-                point.latitude,
-                point.longitude,
-                distance
-            )
-            if (distance[0] >= MIN_DISTANCE_FOR_DISTANCE_METERS) {
-                recordingDistanceMeters += distance[0]
-            }
+    private fun drawActiveTrack(state: RecordingState) {
+        val type = state.type ?: return
+        val polyline = activeTrackPolyline ?: createTrackPolyline(type).also { newPolyline ->
+            activeTrackPolyline = newPolyline
+            map.overlays.add(newPolyline)
         }
+        polyline.outlinePaint.color = type.color
+        polyline.setPoints(state.points.map { it.toGeoPoint() })
 
-        recordingPoints.add(point)
-        recordingPolyline?.setPoints(recordingPoints.map { it.toGeoPoint() })
-        updateRecordingPanel()
-
-        if (recordingPoints.size == 1) {
+        state.points.lastOrNull()?.let { point ->
             map.controller.animateTo(point.toGeoPoint())
-            map.controller.setZoom(17.0)
         }
-
-        map.invalidate()
-    }
-
-    private fun isUsableTrackLocation(location: Location): Boolean {
-        if (location.hasAccuracy() && location.accuracy > MAX_ACCEPTED_ACCURACY_METERS) {
-            return false
-        }
-        return true
-    }
-
-    private fun updateRecordingPanel() {
-        distanceText.text = formatDistance(recordingDistanceMeters)
-        val elapsedMillis = (System.currentTimeMillis() - recordingStartedAtMillis).coerceAtLeast(0L)
-        durationText.text = formatDuration(elapsedMillis)
     }
 
     private fun loadSavedTracks() {
-        tracksDirectory()
-            .listFiles { file -> file.extension.equals("gpx", ignoreCase = true) }
-            ?.sortedBy { it.name }
-            ?.forEach { file ->
-                parseGpxTrack(file)?.let { track ->
-                    if (track.points.isNotEmpty()) {
-                        val polyline = createTrackPolyline(track.type)
-                        polyline.setPoints(track.points.map { it.toGeoPoint() })
-                        map.overlays.add(polyline)
-                    }
-                }
+        savedTrackOverlays.forEach { map.overlays.remove(it) }
+        savedTrackOverlays.clear()
+
+        trackStore.loadTracks()
+            .filter { it.visible }
+            .forEach { track ->
+                val polyline = createTrackPolyline(track.type)
+                polyline.setPoints(track.points.map { it.toGeoPoint() })
+                savedTrackOverlays.add(polyline)
+                map.overlays.add(polyline)
             }
         map.invalidate()
     }
@@ -413,170 +357,313 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun saveTrackAsGpx(
-        type: TrackType,
-        points: List<TrackPoint>,
-        distanceMeters: Float,
-        startedAtMillis: Long
-    ): File {
-        val file = File(
-            tracksDirectory(),
-            "track-${type.gpxType}-${DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.US)
-                .withZone(java.time.ZoneOffset.UTC)
-                .format(Instant.ofEpochMilli(startedAtMillis))}.gpx"
+    private fun showTracksScreen() {
+        val tracks = trackStore.loadTracks()
+        showSection(getString(R.string.my_tracks))
+
+        if (tracks.isEmpty()) {
+            sectionContent.addView(emptyStateText(getString(R.string.no_tracks)))
+            return
+        }
+
+        tracks.groupBy { GpxTrackStore.monthKey(it) }
+            .toSortedMap(compareByDescending<YearMonth> { it.year }.thenByDescending { it.monthValue })
+            .forEach { (month, monthTracks) ->
+                sectionContent.addView(groupTitle(formatMonthTitle(month)))
+                monthTracks.sortedByDescending { it.startedAtMillis }.forEach { track ->
+                    sectionContent.addView(trackCard(track))
+                }
+            }
+    }
+
+    private fun showStatisticsScreen() {
+        val tracks = trackStore.loadTracks()
+        showSection(getString(R.string.statistics))
+        sectionContent.addView(statSummaryCard(tracks))
+        sectionContent.addView(activityStatsCard(TrackType.WALK, tracks))
+        sectionContent.addView(activityStatsCard(TrackType.BIKE, tracks))
+    }
+
+    private fun showSection(title: String) {
+        sectionTitle.text = title
+        sectionContent.removeAllViews()
+        sectionPanel.visibility = View.VISIBLE
+        drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
+    }
+
+    private fun hideSection() {
+        sectionPanel.visibility = View.GONE
+        drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
+    }
+
+    private fun groupTitle(title: String): TextView {
+        return TextView(this).apply {
+            text = title
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            textSize = 22f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(18)
+                bottomMargin = dp(10)
+            }
+        }
+    }
+
+    private fun trackCard(track: RecordedTrack): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_content_card)
+            setPadding(dp(16), dp(14), dp(16), dp(12))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(12)
+            }
+        }
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val colorMark = View(this).apply {
+            setBackgroundColor(track.type.color)
+            layoutParams = LinearLayout.LayoutParams(dp(4), dp(42)).apply {
+                rightMargin = dp(12)
+            }
+        }
+        header.addView(colorMark)
+
+        val titleColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        titleColumn.addView(TextView(this).apply {
+            text = track.name
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        titleColumn.addView(TextView(this).apply {
+            text = "${track.type.title} · ${formatTrackDate(track.startedAtMillis)}"
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 14f
+        })
+        header.addView(titleColumn)
+        card.addView(header)
+
+        card.addView(TextView(this).apply {
+            text = "${formatDistance(track.distanceMeters)} · ${formatDuration(track.durationMillis)}"
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+            textSize = 16f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(12)
+            }
+        })
+
+        val visibilitySwitch = SwitchMaterial(this).apply {
+            text = getString(R.string.visible_on_map)
+            isChecked = track.visible
+            textSize = 15f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+            setOnCheckedChangeListener { _, checked ->
+                trackStore.setTrackVisibility(track, checked)
+                loadSavedTracks()
+                showTracksScreen()
+            }
+        }
+        card.addView(visibilitySwitch)
+
+        val actions = LinearLayout(this).apply {
+            gravity = Gravity.END
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(4)
+            }
+        }
+        actions.addView(actionButton(R.drawable.ic_edit, R.string.rename) {
+            showRenameDialog(track)
+        })
+        actions.addView(actionButton(R.drawable.ic_delete, R.string.delete) {
+            showDeleteDialog(track)
+        })
+        card.addView(actions)
+
+        return card
+    }
+
+    private fun actionButton(iconRes: Int, labelRes: Int, action: () -> Unit): MaterialButton {
+        return MaterialButton(this).apply {
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            text = getString(labelRes)
+            textSize = 14f
+            isAllCaps = false
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+            setIconResource(iconRes)
+            iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_text_primary)
+            iconPadding = dp(6)
+            minWidth = 0
+            setPadding(dp(10), 0, dp(10), 0)
+            setOnClickListener { action() }
+        }
+    }
+
+    private fun showRenameDialog(track: RecordedTrack) {
+        val input = EditText(this).apply {
+            setText(track.name)
+            selectAll()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        }
+        val container = FrameLayout(this).apply {
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(input)
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.rename_track)
+            .setView(container)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.save) { _, _ ->
+                trackStore.renameTrack(track, input.text.toString().trim())
+                loadSavedTracks()
+                showTracksScreen()
+            }
+            .show()
+    }
+
+    private fun showDeleteDialog(track: RecordedTrack) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.delete_track_title)
+            .setMessage(R.string.delete_track_message)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.delete) { _, _ ->
+                trackStore.deleteTrack(track)
+                loadSavedTracks()
+                showTracksScreen()
+            }
+            .show()
+    }
+
+    private fun statSummaryCard(tracks: List<RecordedTrack>): View {
+        return statsCard(
+            title = getString(R.string.all_time),
+            primary = formatDistance(tracks.sumOf { it.distanceMeters.toDouble() }.toFloat()),
+            secondary = "${tracks.size} треков · ${formatDuration(tracks.sumOf { it.durationMillis })}"
         )
-
-        file.outputStream().use { stream ->
-            val serializer = Xml.newSerializer()
-            serializer.setOutput(stream, Charsets.UTF_8.name())
-            serializer.startDocument(Charsets.UTF_8.name(), true)
-            serializer.startTag(null, "gpx")
-            serializer.attribute(null, "version", "1.1")
-            serializer.attribute(null, "creator", "ICU")
-            serializer.attribute(null, "xmlns", "http://www.topografix.com/GPX/1/1")
-
-            serializer.startTag(null, "metadata")
-            serializer.startTag(null, "time")
-            serializer.text(formatInstant(startedAtMillis))
-            serializer.endTag(null, "time")
-            serializer.endTag(null, "metadata")
-
-            serializer.startTag(null, "trk")
-            serializer.startTag(null, "name")
-            serializer.text("${type.title} ${formatInstant(startedAtMillis)}")
-            serializer.endTag(null, "name")
-            serializer.startTag(null, "type")
-            serializer.text(type.gpxType)
-            serializer.endTag(null, "type")
-            serializer.startTag(null, "extensions")
-            serializer.startTag(null, "distanceMeters")
-            serializer.text(distanceMeters.roundToInt().toString())
-            serializer.endTag(null, "distanceMeters")
-            serializer.endTag(null, "extensions")
-
-            serializer.startTag(null, "trkseg")
-            points.forEach { point ->
-                serializer.startTag(null, "trkpt")
-                serializer.attribute(null, "lat", point.latitude.toString())
-                serializer.attribute(null, "lon", point.longitude.toString())
-                point.altitude?.let { altitude ->
-                    serializer.startTag(null, "ele")
-                    serializer.text(altitude.toString())
-                    serializer.endTag(null, "ele")
-                }
-                serializer.startTag(null, "time")
-                serializer.text(formatInstant(point.timeMillis))
-                serializer.endTag(null, "time")
-                serializer.endTag(null, "trkpt")
-            }
-            serializer.endTag(null, "trkseg")
-            serializer.endTag(null, "trk")
-            serializer.endTag(null, "gpx")
-            serializer.endDocument()
-        }
-
-        return file
     }
 
-    private fun parseGpxTrack(file: File): RecordedTrack? {
-        val parser = Xml.newPullParser()
-        file.inputStream().use { input ->
-            parser.setInput(input, Charsets.UTF_8.name())
-            var type = TrackType.WALK
-            val points = mutableListOf<TrackPoint>()
+    private fun activityStatsCard(type: TrackType, tracks: List<RecordedTrack>): View {
+        val activityTracks = tracks.filter { it.type == type }
+        val currentMonth = YearMonth.now()
+        val monthTracks = activityTracks.filter { GpxTrackStore.monthKey(it) == currentMonth }
 
-            while (parser.next() != XmlPullParser.END_DOCUMENT) {
-                if (parser.eventType != XmlPullParser.START_TAG) continue
+        val secondary = "${activityTracks.size} треков · ${getString(R.string.this_month)}: " +
+            formatDistance(monthTracks.sumOf { it.distanceMeters.toDouble() }.toFloat())
 
-                when (parser.name) {
-                    "type" -> type = TrackType.fromGpxType(parser.readText())
-                    "trkpt" -> parseTrackPoint(parser)?.let { points.add(it) }
-                }
+        return statsCard(
+            title = type.title,
+            primary = formatDistance(activityTracks.sumOf { it.distanceMeters.toDouble() }.toFloat()),
+            secondary = secondary,
+            accentColor = type.color
+        )
+    }
+
+    private fun statsCard(
+        title: String,
+        primary: String,
+        secondary: String,
+        accentColor: Int = ContextCompat.getColor(this, R.color.icu_purple_ink)
+    ): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_content_card)
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(12)
             }
+        }
+        card.addView(TextView(this).apply {
+            text = title
+            setTextColor(accentColor)
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        card.addView(TextView(this).apply {
+            text = primary
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            textSize = 32f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        card.addView(TextView(this).apply {
+            text = secondary
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 15f
+        })
+        return card
+    }
 
-            return RecordedTrack(
-                type = type,
-                points = points,
-                distanceMeters = calculateDistance(points),
-                startedAtMillis = points.firstOrNull()?.timeMillis ?: file.lastModified(),
-                file = file
+    private fun emptyStateText(textValue: String): TextView {
+        return TextView(this).apply {
+            text = textValue
+            gravity = Gravity.CENTER
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 17f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(240)
             )
         }
     }
 
-    private fun parseTrackPoint(parser: XmlPullParser): TrackPoint? {
-        val latitude = parser.getAttributeValue(null, "lat")?.toDoubleOrNull() ?: return null
-        val longitude = parser.getAttributeValue(null, "lon")?.toDoubleOrNull() ?: return null
-        var altitude: Double? = null
-        var timeMillis = System.currentTimeMillis()
+    private fun registerRecordingReceiver() {
+        if (isReceiverRegistered) return
+        val filter = IntentFilter(TrackRecordingService.ACTION_STATE_CHANGED)
+        ContextCompat.registerReceiver(this, recordingStateReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        isReceiverRegistered = true
+    }
 
-        while (parser.next() != XmlPullParser.END_DOCUMENT) {
-            if (parser.eventType == XmlPullParser.END_TAG && parser.name == "trkpt") break
-            if (parser.eventType != XmlPullParser.START_TAG) continue
+    private fun unregisterRecordingReceiver() {
+        if (!isReceiverRegistered) return
+        unregisterReceiver(recordingStateReceiver)
+        isReceiverRegistered = false
+    }
 
-            when (parser.name) {
-                "ele" -> altitude = parser.readText().toDoubleOrNull()
-                "time" -> timeMillis = runCatching {
-                    Instant.parse(parser.readText()).toEpochMilli()
-                }.getOrDefault(timeMillis)
+    private fun enableMyLocation() {
+        if (!hasLocationPermission()) return
+
+        if (locationOverlay == null) {
+            locationOverlay = MyLocationNewOverlay(GpsMyLocationProvider(this), map).also { overlay ->
+                overlay.enableMyLocation()
+                overlay.enableFollowLocation()
+                overlay.runOnFirstFix {
+                    runOnUiThread {
+                        overlay.myLocation?.let { location ->
+                            map.controller.animateTo(location)
+                            map.controller.setZoom(17.0)
+                        }
+                    }
+                }
+                map.overlays.add(overlay)
             }
-        }
-
-        return TrackPoint(latitude, longitude, altitude, timeMillis)
-    }
-
-    private fun XmlPullParser.readText(): String {
-        if (next() != XmlPullParser.TEXT) return ""
-        val result = text
-        nextTag()
-        return result
-    }
-
-    private fun tracksDirectory(): File {
-        return File(filesDir, "tracks").also { directory ->
-            if (!directory.exists()) {
-                directory.mkdirs()
-            }
-        }
-    }
-
-    private fun calculateDistance(points: List<TrackPoint>): Float {
-        var distanceMeters = 0f
-        points.zipWithNext { previous, current ->
-            val result = FloatArray(1)
-            Location.distanceBetween(
-                previous.latitude,
-                previous.longitude,
-                current.latitude,
-                current.longitude,
-                result
-            )
-            if (result[0] >= MIN_DISTANCE_FOR_DISTANCE_METERS) {
-                distanceMeters += result[0]
-            }
-        }
-        return distanceMeters
-    }
-
-    private fun formatDistance(meters: Float): String {
-        return String.format(Locale.forLanguageTag("ru-RU"), "%.2f км", meters / 1000f)
-    }
-
-    private fun formatDuration(millis: Long): String {
-        val totalSeconds = millis / 1000
-        val hours = totalSeconds / 3600
-        val minutes = (totalSeconds % 3600) / 60
-        val seconds = totalSeconds % 60
-
-        return if (hours > 0) {
-            String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
         } else {
-            String.format(Locale.US, "%02d:%02d", minutes, seconds)
+            locationOverlay?.enableMyLocation()
+            locationOverlay?.enableFollowLocation()
         }
-    }
 
-    private fun formatInstant(timeMillis: Long): String {
-        return DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(timeMillis))
+        map.invalidate()
     }
 
     private fun hasLocationPermission(): Boolean {
@@ -601,11 +688,57 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun hasNotificationPermission(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun formatMonthTitle(month: YearMonth): String {
+        val formatter = DateTimeFormatter.ofPattern("LLLL, yyyy", Locale.forLanguageTag("ru-RU"))
+        return month.format(formatter).replaceFirstChar { char ->
+            if (char.isLowerCase()) char.titlecase(Locale.forLanguageTag("ru-RU")) else char.toString()
+        }
+    }
+
+    private fun formatTrackDate(timeMillis: Long): String {
+        val formatter = DateTimeFormatter
+            .ofPattern("d MMMM yyyy, HH:mm", Locale.forLanguageTag("ru-RU"))
+            .withZone(ZoneId.systemDefault())
+        return formatter.format(Instant.ofEpochMilli(timeMillis))
+    }
+
+    private fun formatDistance(meters: Float): String {
+        return String.format(Locale.forLanguageTag("ru-RU"), "%.2f км", meters / 1000f)
+    }
+
+    private fun formatDuration(millis: Long): String {
+        val totalSeconds = millis / 1000
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+
+        return if (hours > 0) {
+            String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(Locale.US, "%02d:%02d", minutes, seconds)
+        }
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
+    }
+
     companion object {
-        private const val LOCATION_INTERVAL_MS = 5_000L
-        private const val TIMER_INTERVAL_MS = 1_000L
-        private const val MAX_ACCEPTED_ACCURACY_METERS = 50f
-        private const val MIN_DISTANCE_FOR_DISTANCE_METERS = 3f
         private const val TRACK_STROKE_WIDTH = 8f
+        private const val TIMER_INTERVAL_MS = 1_000L
     }
 }

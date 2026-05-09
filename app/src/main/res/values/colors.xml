@@ -14,4 +14,8 @@
     <color name="icu_sheet_divider">#CCC4D2</color>
     <color name="icu_blue_track">#2F5BD1</color>
     <color name="icu_upload_disabled">#E6D8F6</color>
+    <color name="icu_screen_surface">#FFFBFE</color>
+    <color name="icu_card_surface">#FFFFFF</color>
+    <color name="icu_text_secondary">#746C7D</color>
+    <color name="icu_danger">#B3261E</color>
 </resources>
