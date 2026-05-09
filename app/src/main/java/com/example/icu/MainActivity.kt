@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
@@ -99,6 +98,7 @@ class MainActivity : AppCompatActivity() {
     private var wasRecording = false
     private var currentSection: Section = Section.NONE
     private var currentAuthStep: AuthStep = AuthStep.NONE
+    private var lastAuthEmail: String = ""
     private var authRootView: LinearLayout? = null
     private var lastForegroundLiveUploadMillis = 0L
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
@@ -233,6 +233,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupImeInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(bottomNavigation) { view, insets ->
+            val navInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            view.setPadding(
+                view.paddingLeft,
+                view.paddingTop,
+                view.paddingRight,
+                dp(8) + navInsets.bottom
+            )
+            insets
+        }
         ViewCompat.setOnApplyWindowInsetsListener(sectionPanel) { _, insets ->
             val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
             val isImeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
@@ -374,6 +384,8 @@ class MainActivity : AppCompatActivity() {
 
         val emailInput = TextInputEditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            setText(lastAuthEmail)
+            setSelection(text?.length ?: 0)
             setSingleLine(true)
         }
 
@@ -390,6 +402,7 @@ class MainActivity : AppCompatActivity() {
                 onPrimary = {
                     val email = emailInput.text?.toString()?.trim().orEmpty()
                     if (email.isBlank()) return@authBottomActions
+                    lastAuthEmail = email
                     checkEmailAndShowPassword(email)
                 },
                 secondaryText = getString(R.string.close),
@@ -625,29 +638,11 @@ class MainActivity : AppCompatActivity() {
                 typeface = Typeface.DEFAULT_BOLD
             })
             addView(TextInputLayout(this@MainActivity).apply {
-                val primaryColor = ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink)
-                val secondaryColor = ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary)
-                val textColor = ContextCompat.getColor(this@MainActivity, R.color.black)
-                val surfaceColor = ContextCompat.getColor(this@MainActivity, R.color.icu_card_surface)
-
                 this.hint = hint
                 boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
-                boxBackgroundColor = surfaceColor
-                setHintTextColor(ColorStateList.valueOf(secondaryColor))
-                defaultHintTextColor = ColorStateList.valueOf(secondaryColor)
-                setBoxStrokeColorStateList(
-                    ColorStateList(
-                        arrayOf(
-                            intArrayOf(android.R.attr.state_focused),
-                            intArrayOf()
-                        ),
-                        intArrayOf(primaryColor, secondaryColor)
-                    )
-                )
                 setBoxCornerRadii(dp(8).toFloat(), dp(8).toFloat(), dp(8).toFloat(), dp(8).toFloat())
                 if (isPassword) {
                     endIconMode = TextInputLayout.END_ICON_PASSWORD_TOGGLE
-                    setEndIconTintList(ColorStateList.valueOf(secondaryColor))
                 }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -655,10 +650,6 @@ class MainActivity : AppCompatActivity() {
                 ).apply {
                     topMargin = dp(16)
                 }
-                input.setTextColor(textColor)
-                input.setHintTextColor(secondaryColor)
-                input.highlightColor = Color.TRANSPARENT
-                input.backgroundTintList = ColorStateList.valueOf(surfaceColor)
                 addView(input)
                 if (isPassword) {
                     input.transformationMethod = PasswordTransformationMethod.getInstance()
@@ -690,13 +681,6 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        root.addView(View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-        })
         root.addView(body)
         root.addView(View(this).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -726,7 +710,8 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(32)
+                topMargin = dp(280)
+                bottomMargin = dp(24)
             }
 
             if (secondaryText != null && onSecondary != null) {
