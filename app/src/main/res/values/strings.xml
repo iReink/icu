@@ -54,6 +54,7 @@
     <string name="create_account_offer_title">Не получилось войти</string>
     <string name="create_account_offer_message">Проверьте пароль или создайте новый аккаунт с этим email.</string>
     <string name="auth_email_confirmation">Аккаунт создан. Если Supabase попросит подтверждение, проверьте почту и затем войдите.</string>
+    <string name="email_confirmed_sign_in">Email подтверждён. Теперь войдите в аккаунт.</string>
     <string name="auth_failed">Не удалось войти: %1$s</string>
     <string name="sync_started">Синхронизация началась</string>
     <string name="sync_finished">Синхронизация завершена: выгружено %1$d, загружено %2$d</string>

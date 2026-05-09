@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
+import java.net.URLEncoder
 import java.net.URL
 import java.time.Instant
 import java.util.Locale
@@ -40,7 +41,7 @@ class SupabaseApiClient(
 
         val response = request(
             method = "POST",
-            url = "${SupabaseConfig.PROJECT_URL}/auth/v1/signup",
+            url = "${SupabaseConfig.PROJECT_URL}/auth/v1/signup?redirect_to=${SupabaseConfig.AUTH_REDIRECT_URI.urlEncoded()}",
             headers = jsonHeaders(),
             body = body
         )
@@ -256,6 +257,10 @@ class SupabaseApiClient(
         private const val REFRESH_MARGIN_MILLIS = 60_000L
         private const val DEFAULT_EXPIRES_IN_SECONDS = 3600L
     }
+}
+
+private fun String.urlEncoded(): String {
+    return URLEncoder.encode(this, Charsets.UTF_8.name())
 }
 
 data class RemoteTrack(

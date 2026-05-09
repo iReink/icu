@@ -141,6 +141,7 @@ class MainActivity : AppCompatActivity() {
         loadSavedTracks()
         syncRecordingState()
         updateAuthHeader()
+        handleAuthCallback(intent)
 
         if (hasLocationPermission()) {
             enableMyLocation(follow = true)
@@ -183,6 +184,12 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         backgroundExecutor.shutdown()
         super.onDestroy()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleAuthCallback(intent)
     }
 
     private fun bindViews() {
@@ -259,6 +266,16 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<MaterialButton>(R.id.closeSectionButton).setOnClickListener {
             hideSection()
+        }
+    }
+
+    private fun handleAuthCallback(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (data.scheme == "icu" && data.host == "auth-callback") {
+            Toast.makeText(this, R.string.email_confirmed_sign_in, Toast.LENGTH_LONG).show()
+            if (sessionStore.current() == null) {
+                showEmailDialog()
+            }
         }
     }
 
