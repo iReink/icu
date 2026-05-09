@@ -19,12 +19,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.PopupMenu
 import androidx.core.content.ContextCompat
 import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
@@ -33,7 +35,6 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
-import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.tabs.TabLayout
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -465,29 +466,31 @@ class MainActivity : AppCompatActivity() {
 
     private fun trackCard(track: RecordedTrack): View {
         val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundResource(R.drawable.bg_content_card)
-            setPadding(dp(16), dp(14), dp(16), dp(12))
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundResource(R.drawable.bg_track_cell)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(12)
+                bottomMargin = dp(6)
             }
+        }
+
+        card.addView(View(this).apply {
+            setBackgroundColor(track.type.color)
+            layoutParams = LinearLayout.LayoutParams(dp(4), ViewGroup.LayoutParams.MATCH_PARENT)
+        })
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(8), dp(10))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-
-        val colorMark = View(this).apply {
-            setBackgroundColor(track.type.color)
-            layoutParams = LinearLayout.LayoutParams(dp(4), dp(42)).apply {
-                rightMargin = dp(12)
-            }
-        }
-        header.addView(colorMark)
 
         val titleColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -496,78 +499,84 @@ class MainActivity : AppCompatActivity() {
         titleColumn.addView(TextView(this).apply {
             text = track.name
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
-            textSize = 18f
+            textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
         })
         titleColumn.addView(TextView(this).apply {
             text = "${track.type.title} · ${formatTrackDate(track.startedAtMillis)}"
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
-            textSize = 14f
+            textSize = 13f
         })
         header.addView(titleColumn)
-        card.addView(header)
 
-        card.addView(TextView(this).apply {
+        if (!track.visible) {
+            header.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_eye_off)
+                imageTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_text_secondary)
+                contentDescription = getString(R.string.hidden_on_map)
+                layoutParams = LinearLayout.LayoutParams(dp(28), dp(40)).apply {
+                    rightMargin = dp(4)
+                }
+                setPadding(dp(2), dp(8), dp(2), dp(8))
+            })
+        }
+
+        header.addView(MaterialButton(this).apply {
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            elevation = 0f
+            minWidth = 0
+            minimumWidth = 0
+            minimumHeight = dp(40)
+            setPadding(0, 0, 0, 0)
+            contentDescription = getString(R.string.track_actions)
+            setIconResource(R.drawable.ic_kebab_vertical)
+            iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+            iconPadding = 0
+            setOnClickListener { anchor -> showTrackMenu(anchor, track) }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+        })
+
+        content.addView(header)
+
+        content.addView(TextView(this).apply {
             text = "${formatDistance(track.distanceMeters)} · ${formatDuration(track.durationMillis)}"
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
-            textSize = 16f
+            textSize = 14f
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(12)
+                topMargin = dp(8)
             }
         })
 
-        val visibilitySwitch = SwitchMaterial(this).apply {
-            text = getString(R.string.visible_on_map)
-            isChecked = track.visible
-            textSize = 15f
-            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
-            setOnCheckedChangeListener { _, checked ->
-                trackStore.setTrackVisibility(track, checked)
-                loadSavedTracks()
-                showTracksScreen()
-            }
-        }
-        card.addView(visibilitySwitch)
-
-        val actions = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(4)
-            }
-        }
-        actions.addView(actionButton(R.string.rename, R.color.icu_text_primary) {
-            showRenameDialog(track)
-        })
-        actions.addView(View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
-        })
-        actions.addView(actionButton(R.string.delete, R.color.icu_danger) {
-            showDeleteDialog(track)
-        })
-        card.addView(actions)
-
+        card.addView(content)
         return card
     }
 
-    private fun actionButton(labelRes: Int, colorRes: Int, action: () -> Unit): MaterialButton {
-        return MaterialButton(this).apply {
-            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
-            elevation = 0f
-            text = getString(labelRes)
-            textSize = 14f
-            isAllCaps = false
-            setTextColor(ContextCompat.getColor(this@MainActivity, colorRes))
-            minWidth = 0
-            minimumHeight = dp(40)
-            setPadding(dp(12), 0, dp(12), 0)
-            setOnClickListener { action() }
+    private fun showTrackMenu(anchor: View, track: RecordedTrack) {
+        PopupMenu(this, anchor).apply {
+            menu.add(0, TRACK_ACTION_RENAME, 0, R.string.rename)
+            menu.add(
+                0,
+                TRACK_ACTION_VISIBILITY,
+                1,
+                if (track.visible) R.string.hide_from_map else R.string.show_on_map
+            )
+            menu.add(0, TRACK_ACTION_DELETE, 2, R.string.delete)
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    TRACK_ACTION_RENAME -> showRenameDialog(track)
+                    TRACK_ACTION_VISIBILITY -> {
+                        trackStore.setTrackVisibility(track, !track.visible)
+                        loadSavedTracks()
+                        showTracksScreen()
+                    }
+                    TRACK_ACTION_DELETE -> showDeleteDialog(track)
+                }
+                true
+            }
+            show()
         }
     }
 
@@ -889,6 +898,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val TRACK_ACTION_RENAME = 1
+        private const val TRACK_ACTION_VISIBILITY = 2
+        private const val TRACK_ACTION_DELETE = 3
         private const val TRACK_STROKE_WIDTH = 8f
         private const val TIMER_INTERVAL_MS = 1_000L
     }

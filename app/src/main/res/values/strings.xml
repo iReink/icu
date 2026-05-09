@@ -15,6 +15,10 @@
     <string name="rename">Переименовать</string>
     <string name="delete">Удалить</string>
     <string name="visible_on_map">Виден на карте</string>
+    <string name="show_on_map">Показать на карте</string>
+    <string name="hide_from_map">Скрыть с карты</string>
+    <string name="hidden_on_map">Скрыт с карты</string>
+    <string name="track_actions">Действия с треком</string>
     <string name="rename_track">Переименовать трек</string>
     <string name="track_name">Название трека</string>
     <string name="save">Сохранить</string>
