@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">ICU</string>
+    <string name="my_location">Моя позиция</string>
 </resources>
