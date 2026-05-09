@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.text.method.PasswordTransformationMethod
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -313,28 +314,31 @@ class MainActivity : AppCompatActivity() {
     private fun showAuthEmailScreen() {
         currentSection = Section.AUTH
         showSection(getString(R.string.sign_in))
-        setSectionContentPadding(horizontalDp = 20)
 
         val emailInput = TextInputEditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
             setSingleLine(true)
         }
 
-        sectionContent.addView(authInputBlock(
-            title = getString(R.string.enter_email_title),
-            input = emailInput,
-            hint = getString(R.string.email)
-        ))
-        sectionContent.addView(authBottomActions(
-            primaryText = getString(R.string.continue_action),
-            onPrimary = {
-                val email = emailInput.text?.toString()?.trim().orEmpty()
-                if (email.isBlank()) return@authBottomActions
-                checkEmailAndShowPassword(email)
-            },
-            secondaryText = getString(R.string.close),
-            onSecondary = ::hideSection
-        ))
+        setAuthScreenContent(
+            bodyViews = listOf(
+                authInputBlock(
+                    title = getString(R.string.enter_email_title),
+                    input = emailInput,
+                    hint = getString(R.string.email)
+                )
+            ),
+            actions = authBottomActions(
+                primaryText = getString(R.string.continue_action),
+                onPrimary = {
+                    val email = emailInput.text?.toString()?.trim().orEmpty()
+                    if (email.isBlank()) return@authBottomActions
+                    checkEmailAndShowPassword(email)
+                },
+                secondaryText = getString(R.string.close),
+                onSecondary = ::hideSection
+            )
+        )
     }
 
     private fun checkEmailAndShowPassword(email: String) {
@@ -357,9 +361,8 @@ class MainActivity : AppCompatActivity() {
     private fun showAuthPasswordScreen(email: String, emailExists: Boolean) {
         currentSection = Section.AUTH
         showSection(if (emailExists) getString(R.string.sign_in) else getString(R.string.create_account))
-        setSectionContentPadding(horizontalDp = 20)
 
-        sectionContent.addView(TextView(this).apply {
+        val emailText = TextView(this).apply {
             text = email
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
             textSize = 15f
@@ -369,22 +372,26 @@ class MainActivity : AppCompatActivity() {
             ).apply {
                 bottomMargin = dp(18)
             }
-        })
+        }
 
         val passwordInput = TextInputEditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            transformationMethod = PasswordTransformationMethod.getInstance()
             setSingleLine(true)
         }
 
-        sectionContent.addView(authInputBlock(
-            title = if (emailExists) getString(R.string.enter_password_title) else getString(R.string.create_password_title),
-            input = passwordInput,
-            hint = getString(R.string.password),
-            isPassword = true
-        ))
+        val bodyViews = mutableListOf<View>(emailText)
+        bodyViews.add(
+            authInputBlock(
+                title = if (emailExists) getString(R.string.enter_password_title) else getString(R.string.create_password_title),
+                input = passwordInput,
+                hint = getString(R.string.password),
+                isPassword = true
+            )
+        )
 
         if (emailExists) {
-            sectionContent.addView(TextView(this).apply {
+            bodyViews.add(TextView(this).apply {
                 text = getString(R.string.password_recovery_available)
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
                 textSize = 14f
@@ -397,20 +404,23 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
-        sectionContent.addView(authBottomActions(
-            primaryText = if (emailExists) getString(R.string.sign_in) else getString(R.string.create_account),
-            onPrimary = {
-                val password = passwordInput.text?.toString().orEmpty()
-                if (password.isBlank()) return@authBottomActions
-                if (emailExists) {
-                    signIn(email, password)
-                } else {
-                    signUp(email, password)
-                }
-            },
-            secondaryText = getString(R.string.close),
-            onSecondary = ::hideSection
-        ))
+        setAuthScreenContent(
+            bodyViews = bodyViews,
+            actions = authBottomActions(
+                primaryText = if (emailExists) getString(R.string.sign_in) else getString(R.string.create_account),
+                onPrimary = {
+                    val password = passwordInput.text?.toString().orEmpty()
+                    if (password.isBlank()) return@authBottomActions
+                    if (emailExists) {
+                        signIn(email, password)
+                    } else {
+                        signUp(email, password)
+                    }
+                },
+                secondaryText = getString(R.string.close),
+                onSecondary = ::hideSection
+            )
+        )
     }
 
     private fun signIn(email: String, password: String) {
@@ -419,7 +429,9 @@ class MainActivity : AppCompatActivity() {
                 supabaseClient.signIn(email, password)
             }.onSuccess {
                 runOnUiThread {
+                    sessionStore.clearPendingEmail()
                     updateAuthHeader()
+                    hideSection()
                     syncTracks(showToast = true)
                 }
             }.onFailure { error ->
@@ -437,9 +449,12 @@ class MainActivity : AppCompatActivity() {
             }.onSuccess { session ->
                 runOnUiThread {
                     if (session == null) {
+                        sessionStore.savePendingEmail(email)
                         showAuthCheckEmailScreen(email)
                     } else {
+                        sessionStore.clearPendingEmail()
                         updateAuthHeader()
+                        hideSection()
                         syncTracks(showToast = true)
                     }
                 }
@@ -454,15 +469,14 @@ class MainActivity : AppCompatActivity() {
     private fun showAuthCheckEmailScreen(email: String) {
         currentSection = Section.AUTH
         showSection(getString(R.string.create_account))
-        setSectionContentPadding(horizontalDp = 20)
 
-        sectionContent.addView(TextView(this).apply {
+        val title = TextView(this).apply {
             text = getString(R.string.check_email_title)
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
             textSize = 24f
             typeface = Typeface.DEFAULT_BOLD
-        })
-        sectionContent.addView(TextView(this).apply {
+        }
+        val message = TextView(this).apply {
             text = getString(R.string.check_email_message, email)
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
             textSize = 16f
@@ -472,27 +486,31 @@ class MainActivity : AppCompatActivity() {
             ).apply {
                 topMargin = dp(12)
             }
-        })
-        sectionContent.addView(authBottomActions(
-            primaryText = getString(R.string.ok),
-            onPrimary = ::hideSection,
-            secondaryText = getString(R.string.close),
-            onSecondary = ::hideSection
-        ))
+        }
+
+        setAuthScreenContent(
+            bodyViews = listOf(title, message),
+            actions = authBottomActions(
+                primaryText = getString(R.string.ok),
+                onPrimary = ::hideSection,
+                secondaryText = getString(R.string.close),
+                onSecondary = ::hideSection
+            )
+        )
     }
 
     private fun showAuthSuccessScreen() {
+        val pendingEmail = sessionStore.pendingEmail()
         currentSection = Section.AUTH
         showSection(getString(R.string.create_account))
-        setSectionContentPadding(horizontalDp = 20)
 
-        sectionContent.addView(TextView(this).apply {
+        val title = TextView(this).apply {
             text = getString(R.string.registration_success_title)
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
             textSize = 24f
             typeface = Typeface.DEFAULT_BOLD
-        })
-        sectionContent.addView(TextView(this).apply {
+        }
+        val message = TextView(this).apply {
             text = getString(R.string.registration_success_message)
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
             textSize = 16f
@@ -502,16 +520,23 @@ class MainActivity : AppCompatActivity() {
             ).apply {
                 topMargin = dp(12)
             }
-        })
-        sectionContent.addView(authBottomActions(
-            primaryText = getString(R.string.ok),
-            onPrimary = {
-                hideSection()
-                showAuthEntry()
-            },
-            secondaryText = null,
-            onSecondary = null
-        ))
+        }
+        setAuthScreenContent(
+            bodyViews = listOf(title, message),
+            actions = authBottomActions(
+                primaryText = getString(R.string.ok),
+                onPrimary = {
+                    if (pendingEmail != null) {
+                        showAuthPasswordScreen(pendingEmail, emailExists = true)
+                    } else {
+                        hideSection()
+                        showAuthEntry()
+                    }
+                },
+                secondaryText = null,
+                onSecondary = null
+            )
+        )
     }
 
     private fun authInputBlock(
@@ -550,6 +575,46 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setAuthScreenContent(bodyViews: List<View>, actions: View) {
+        setSectionContentPadding(horizontalDp = 20)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            bodyViews.forEach { addView(it) }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        root.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        })
+        root.addView(body)
+        root.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        })
+        root.addView(actions)
+        sectionContent.addView(root)
+    }
+
     private fun authBottomActions(
         primaryText: String,
         onPrimary: () -> Unit,
@@ -563,7 +628,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(280)
+                bottomMargin = dp(24)
             }
 
             if (secondaryText != null && onSecondary != null) {
@@ -894,6 +959,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setSectionContentPadding(horizontalDp: Int) {
         sectionContent.setPadding(dp(horizontalDp), 0, dp(horizontalDp), dp(32))
+        sectionContent.gravity = Gravity.NO_GRAVITY
     }
 
     private fun groupTitle(title: String): TextView {

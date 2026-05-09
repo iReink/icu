@@ -39,6 +39,18 @@ class SupabaseSessionStore(context: Context) {
         prefs.edit().clear().apply()
     }
 
+    fun savePendingEmail(email: String) {
+        prefs.edit().putString(KEY_PENDING_EMAIL, email).apply()
+    }
+
+    fun pendingEmail(): String? {
+        return prefs.getString(KEY_PENDING_EMAIL, null)
+    }
+
+    fun clearPendingEmail() {
+        prefs.edit().remove(KEY_PENDING_EMAIL).apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "supabase_session"
         private const val KEY_USER_ID = "user_id"
@@ -46,5 +58,6 @@ class SupabaseSessionStore(context: Context) {
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_REFRESH_TOKEN = "refresh_token"
         private const val KEY_EXPIRES_AT = "expires_at"
+        private const val KEY_PENDING_EMAIL = "pending_email"
     }
 }
