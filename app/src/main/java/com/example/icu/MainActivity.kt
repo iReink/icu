@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
@@ -27,10 +28,13 @@ import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.widget.PopupMenu
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.GravityCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
@@ -89,6 +93,7 @@ class MainActivity : AppCompatActivity() {
     private var shouldFollowLocation = true
     private var wasRecording = false
     private var currentSection: Section = Section.NONE
+    private var authRootView: LinearLayout? = null
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
 
     private val elapsedHandler = Handler(Looper.getMainLooper())
@@ -128,6 +133,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
         super.onCreate(savedInstanceState)
 
         Configuration.getInstance().userAgentValue = packageName
@@ -139,6 +145,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         bindViews()
+        setupImeInsets()
         setupMap()
         setupDrawer()
         setupActions()
@@ -209,6 +216,20 @@ class MainActivity : AppCompatActivity() {
         sectionPanel = findViewById(R.id.sectionPanel)
         sectionTitle = findViewById(R.id.sectionTitle)
         sectionContent = findViewById(R.id.sectionContent)
+    }
+
+    private fun setupImeInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(sectionPanel) { _, insets ->
+            val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val isImeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
+            authRootView?.setPadding(
+                0,
+                0,
+                0,
+                if (isImeVisible) imeInsets.bottom else 0
+            )
+            insets
+        }
     }
 
     private fun setupMap() {
@@ -558,11 +579,29 @@ class MainActivity : AppCompatActivity() {
                 typeface = Typeface.DEFAULT_BOLD
             })
             addView(TextInputLayout(this@MainActivity).apply {
+                val primaryColor = ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink)
+                val secondaryColor = ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary)
+                val textColor = ContextCompat.getColor(this@MainActivity, R.color.black)
+                val surfaceColor = ContextCompat.getColor(this@MainActivity, R.color.icu_card_surface)
+
                 this.hint = hint
                 boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+                boxBackgroundColor = surfaceColor
+                setHintTextColor(ColorStateList.valueOf(secondaryColor))
+                defaultHintTextColor = ColorStateList.valueOf(secondaryColor)
+                setBoxStrokeColorStateList(
+                    ColorStateList(
+                        arrayOf(
+                            intArrayOf(android.R.attr.state_focused),
+                            intArrayOf()
+                        ),
+                        intArrayOf(primaryColor, secondaryColor)
+                    )
+                )
                 setBoxCornerRadii(dp(8).toFloat(), dp(8).toFloat(), dp(8).toFloat(), dp(8).toFloat())
                 if (isPassword) {
                     endIconMode = TextInputLayout.END_ICON_PASSWORD_TOGGLE
+                    setEndIconTintList(ColorStateList.valueOf(secondaryColor))
                 }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -570,7 +609,13 @@ class MainActivity : AppCompatActivity() {
                 ).apply {
                     topMargin = dp(16)
                 }
+                input.setTextColor(textColor)
+                input.setHintTextColor(secondaryColor)
                 addView(input)
+                if (isPassword) {
+                    input.transformationMethod = PasswordTransformationMethod.getInstance()
+                    input.setSelection(input.text?.length ?: 0)
+                }
             })
         }
     }
@@ -585,6 +630,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         }
+        authRootView = root
 
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -613,6 +659,10 @@ class MainActivity : AppCompatActivity() {
         })
         root.addView(actions)
         sectionContent.addView(root)
+        sectionContent.post {
+            root.minimumHeight = sectionContent.height
+            ViewCompat.requestApplyInsets(sectionPanel)
+        }
     }
 
     private fun authBottomActions(
@@ -942,6 +992,7 @@ class MainActivity : AppCompatActivity() {
     private fun showSection(title: String) {
         sectionTitle.text = title
         sectionContent.removeAllViews()
+        authRootView = null
         sectionPanel.visibility = View.VISIBLE
         addTrackFab.visibility = View.GONE
         myLocationButton.visibility = View.GONE
