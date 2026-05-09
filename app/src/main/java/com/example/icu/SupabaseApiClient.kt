@@ -14,6 +14,21 @@ import java.util.zip.GZIPOutputStream
 class SupabaseApiClient(
     private val sessionStore: SupabaseSessionStore
 ) {
+    fun emailExists(email: String): Boolean {
+        val body = JSONObject()
+            .put("candidate_email", email)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+
+        val response = request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/email_exists_for_auth",
+            headers = jsonHeaders(),
+            body = body
+        )
+        return response.text.trim().toBooleanStrictOrNull() ?: false
+    }
+
     fun signIn(email: String, password: String): SupabaseSession {
         val body = JSONObject()
             .put("email", email)

@@ -40,6 +40,8 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import androidx.viewpager2.widget.ViewPager2
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -85,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     private var isReceiverRegistered = false
     private var shouldFollowLocation = true
     private var wasRecording = false
+    private var currentSection: Section = Section.NONE
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
 
     private val elapsedHandler = Handler(Looper.getMainLooper())
@@ -272,10 +275,7 @@ class MainActivity : AppCompatActivity() {
     private fun handleAuthCallback(intent: Intent?) {
         val data = intent?.data ?: return
         if (data.scheme == "icu" && data.host == "auth-callback") {
-            Toast.makeText(this, R.string.email_confirmed_sign_in, Toast.LENGTH_LONG).show()
-            if (sessionStore.current() == null) {
-                showEmailDialog()
-            }
+            showAuthSuccessScreen()
         }
     }
 
@@ -307,52 +307,112 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        showEmailDialog()
+        showAuthEmailScreen()
     }
 
-    private fun showEmailDialog() {
-        val input = EditText(this).apply {
-            hint = getString(R.string.email)
+    private fun showAuthEmailScreen() {
+        currentSection = Section.AUTH
+        showSection(getString(R.string.sign_in))
+        setSectionContentPadding(horizontalDp = 20)
+
+        val emailInput = TextInputEditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
             setSingleLine(true)
         }
-        val container = dialogInputContainer(input)
 
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.enter_email_title)
-            .setView(container)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.continue_action) { _, _ ->
-                val email = input.text.toString().trim()
-                if (email.isNotBlank()) {
-                    showPasswordDialog(email)
-                }
-            }
-            .show()
+        sectionContent.addView(authInputBlock(
+            title = getString(R.string.enter_email_title),
+            input = emailInput,
+            hint = getString(R.string.email)
+        ))
+        sectionContent.addView(authBottomActions(
+            primaryText = getString(R.string.continue_action),
+            onPrimary = {
+                val email = emailInput.text?.toString()?.trim().orEmpty()
+                if (email.isBlank()) return@authBottomActions
+                checkEmailAndShowPassword(email)
+            },
+            secondaryText = getString(R.string.close),
+            onSecondary = ::hideSection
+        ))
     }
 
-    private fun showPasswordDialog(email: String) {
-        val input = EditText(this).apply {
-            hint = getString(R.string.password)
+    private fun checkEmailAndShowPassword(email: String) {
+        Toast.makeText(this, R.string.checking_email, Toast.LENGTH_SHORT).show()
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.emailExists(email)
+            }.onSuccess { exists ->
+                runOnUiThread {
+                    showAuthPasswordScreen(email, exists)
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    Toast.makeText(this, getString(R.string.auth_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun showAuthPasswordScreen(email: String, emailExists: Boolean) {
+        currentSection = Section.AUTH
+        showSection(if (emailExists) getString(R.string.sign_in) else getString(R.string.create_account))
+        setSectionContentPadding(horizontalDp = 20)
+
+        sectionContent.addView(TextView(this).apply {
+            text = email
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 15f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(18)
+            }
+        })
+
+        val passwordInput = TextInputEditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             setSingleLine(true)
         }
-        val container = dialogInputContainer(input)
 
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.enter_password_title)
-            .setView(container)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.sign_in) { _, _ ->
-                val password = input.text.toString()
-                if (password.isNotBlank()) {
-                    signInOrOfferSignup(email, password)
+        sectionContent.addView(authInputBlock(
+            title = if (emailExists) getString(R.string.enter_password_title) else getString(R.string.create_password_title),
+            input = passwordInput,
+            hint = getString(R.string.password)
+        ))
+
+        if (emailExists) {
+            sectionContent.addView(TextView(this).apply {
+                text = getString(R.string.password_recovery_available)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dp(12)
                 }
-            }
-            .show()
+            })
+        }
+
+        sectionContent.addView(authBottomActions(
+            primaryText = if (emailExists) getString(R.string.sign_in) else getString(R.string.create_account),
+            onPrimary = {
+                val password = passwordInput.text?.toString().orEmpty()
+                if (password.isBlank()) return@authBottomActions
+                if (emailExists) {
+                    signIn(email, password)
+                } else {
+                    signUp(email, password)
+                }
+            },
+            secondaryText = getString(R.string.close),
+            onSecondary = ::hideSection
+        ))
     }
 
-    private fun signInOrOfferSignup(email: String, password: String) {
+    private fun signIn(email: String, password: String) {
         backgroundExecutor.execute {
             runCatching {
                 supabaseClient.signIn(email, password)
@@ -363,25 +423,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    if ((error as? SupabaseException)?.isInvalidCredentials() == true) {
-                        showSignupOffer(email, password)
-                    } else {
-                        Toast.makeText(this, getString(R.string.auth_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
-                    }
+                    Toast.makeText(this, getString(R.string.auth_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
                 }
             }
         }
-    }
-
-    private fun showSignupOffer(email: String, password: String) {
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.create_account_offer_title)
-            .setMessage(R.string.create_account_offer_message)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.create_account) { _, _ ->
-                signUp(email, password)
-            }
-            .show()
     }
 
     private fun signUp(email: String, password: String) {
@@ -391,7 +436,7 @@ class MainActivity : AppCompatActivity() {
             }.onSuccess { session ->
                 runOnUiThread {
                     if (session == null) {
-                        Toast.makeText(this, R.string.auth_email_confirmation, Toast.LENGTH_LONG).show()
+                        showAuthCheckEmailScreen(email)
                     } else {
                         updateAuthHeader()
                         syncTracks(showToast = true)
@@ -402,6 +447,143 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, getString(R.string.auth_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
                 }
             }
+        }
+    }
+
+    private fun showAuthCheckEmailScreen(email: String) {
+        currentSection = Section.AUTH
+        showSection(getString(R.string.create_account))
+        setSectionContentPadding(horizontalDp = 20)
+
+        sectionContent.addView(TextView(this).apply {
+            text = getString(R.string.check_email_title)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            textSize = 24f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        sectionContent.addView(TextView(this).apply {
+            text = getString(R.string.check_email_message, email)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 16f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(12)
+            }
+        })
+        sectionContent.addView(authBottomActions(
+            primaryText = getString(R.string.ok),
+            onPrimary = ::hideSection,
+            secondaryText = getString(R.string.close),
+            onSecondary = ::hideSection
+        ))
+    }
+
+    private fun showAuthSuccessScreen() {
+        currentSection = Section.AUTH
+        showSection(getString(R.string.create_account))
+        setSectionContentPadding(horizontalDp = 20)
+
+        sectionContent.addView(TextView(this).apply {
+            text = getString(R.string.registration_success_title)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            textSize = 24f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        sectionContent.addView(TextView(this).apply {
+            text = getString(R.string.registration_success_message)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 16f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(12)
+            }
+        })
+        sectionContent.addView(authBottomActions(
+            primaryText = getString(R.string.ok),
+            onPrimary = {
+                hideSection()
+                showAuthEntry()
+            },
+            secondaryText = null,
+            onSecondary = null
+        ))
+    }
+
+    private fun authInputBlock(title: String, input: TextInputEditText, hint: String): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 22f
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            addView(TextInputLayout(this@MainActivity).apply {
+                this.hint = hint
+                boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+                setBoxCornerRadii(dp(8).toFloat(), dp(8).toFloat(), dp(8).toFloat(), dp(8).toFloat())
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dp(16)
+                }
+                addView(input)
+            })
+        }
+    }
+
+    private fun authBottomActions(
+        primaryText: String,
+        onPrimary: () -> Unit,
+        secondaryText: String?,
+        onSecondary: (() -> Unit)?
+    ): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(280)
+            }
+
+            if (secondaryText != null && onSecondary != null) {
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = secondaryText
+                    isAllCaps = false
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                    elevation = 0f
+                    stateListAnimator = null
+                    setOnClickListener { onSecondary() }
+                    layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+                        rightMargin = dp(8)
+                    }
+                })
+            } else {
+                addView(View(this@MainActivity).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+                })
+            }
+
+            addView(MaterialButton(this@MainActivity).apply {
+                text = primaryText
+                isAllCaps = false
+                setOnClickListener { onPrimary() }
+                layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+                    leftMargin = dp(8)
+                }
+            })
         }
     }
 
@@ -443,15 +625,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTracksScreenIfVisible() {
-        if (sectionPanel.visibility == View.VISIBLE && sectionTitle.text == getString(R.string.my_tracks)) {
+        if (sectionPanel.visibility == View.VISIBLE && currentSection == Section.TRACKS) {
             showTracksScreen()
-        }
-    }
-
-    private fun dialogInputContainer(input: EditText): FrameLayout {
-        return FrameLayout(this).apply {
-            setPadding(dp(20), 0, dp(20), 0)
-            addView(input)
         }
     }
 
@@ -607,6 +782,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTracksScreen() {
+        currentSection = Section.TRACKS
         val tracks = trackStore.loadTracks()
         showSection(getString(R.string.my_tracks))
         setSectionContentPadding(horizontalDp = 20)
@@ -627,6 +803,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showStatisticsScreen() {
+        currentSection = Section.STATISTICS
         val tracks = trackStore.loadTracks()
         showSection(getString(R.string.statistics))
         setSectionContentPadding(horizontalDp = 0)
@@ -660,6 +837,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSettingsScreen() {
+        currentSection = Section.SETTINGS
         showSection(getString(R.string.settings))
         setSectionContentPadding(horizontalDp = 20)
         sectionContent.addView(settingsRow())
@@ -678,6 +856,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun hideSection() {
         sectionPanel.visibility = View.GONE
+        currentSection = Section.NONE
         drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
         syncRecordingState()
     }
@@ -1224,6 +1403,14 @@ class MainActivity : AppCompatActivity() {
         val type: TrackType?,
         val accentColor: Int
     )
+
+    private enum class Section {
+        NONE,
+        TRACKS,
+        STATISTICS,
+        SETTINGS,
+        AUTH
+    }
 
     private inner class StatsPagerAdapter(
         private val pages: List<StatsPage>,
