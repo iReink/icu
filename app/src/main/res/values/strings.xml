@@ -40,4 +40,23 @@
     <string name="recording_notification_stop">Стоп</string>
     <string name="location_provider_disabled">Включи геолокацию на устройстве</string>
     <string name="location_permission_denied">Нет разрешения на геолокацию</string>
+    <string name="sign_in_for_sync">Войдите для синхронизации</string>
+    <string name="signed_in_as">Синхронизация: %1$s</string>
+    <string name="sync_now">Синхронизировать сейчас</string>
+    <string name="sign_out">Выйти</string>
+    <string name="email">Email</string>
+    <string name="password">Пароль</string>
+    <string name="continue_action">Продолжить</string>
+    <string name="sign_in">Войти</string>
+    <string name="create_account">Создать аккаунт</string>
+    <string name="enter_email_title">Введите email</string>
+    <string name="enter_password_title">Введите пароль</string>
+    <string name="create_account_offer_title">Не получилось войти</string>
+    <string name="create_account_offer_message">Проверьте пароль или создайте новый аккаунт с этим email.</string>
+    <string name="auth_email_confirmation">Аккаунт создан. Если Supabase попросит подтверждение, проверьте почту и затем войдите.</string>
+    <string name="auth_failed">Не удалось войти: %1$s</string>
+    <string name="sync_started">Синхронизация началась</string>
+    <string name="sync_finished">Синхронизация завершена: выгружено %1$d, загружено %2$d</string>
+    <string name="sync_failed">Не удалось синхронизировать: %1$s</string>
+    <string name="unsynced_track">Трек ещё не синхронизирован</string>
 </resources>

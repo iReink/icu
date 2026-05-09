@@ -55,6 +55,7 @@ import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
     private lateinit var drawerLayout: DrawerLayout
@@ -70,14 +71,21 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sectionTitle: TextView
     private lateinit var sectionContent: LinearLayout
     private lateinit var trackStore: GpxTrackStore
+    private lateinit var sessionStore: SupabaseSessionStore
+    private lateinit var syncMetadataStore: SyncMetadataStore
+    private lateinit var supabaseClient: SupabaseApiClient
+    private lateinit var syncManager: SupabaseSyncManager
 
     private var locationOverlay: MyLocationNewOverlay? = null
     private var addTrackSheet: BottomSheetDialog? = null
     private var pendingStartType: TrackType? = null
+    private var authStatusText: TextView? = null
     private var savedTrackOverlays = mutableListOf<Polyline>()
     private var activeTrackPolyline: Polyline? = null
     private var isReceiverRegistered = false
     private var shouldFollowLocation = true
+    private var wasRecording = false
+    private val backgroundExecutor = Executors.newSingleThreadExecutor()
 
     private val elapsedHandler = Handler(Looper.getMainLooper())
     private val elapsedTicker = object : Runnable {
@@ -120,6 +128,10 @@ class MainActivity : AppCompatActivity() {
 
         Configuration.getInstance().userAgentValue = packageName
         trackStore = GpxTrackStore(this)
+        sessionStore = SupabaseSessionStore(this)
+        syncMetadataStore = SyncMetadataStore(this)
+        supabaseClient = SupabaseApiClient(sessionStore)
+        syncManager = SupabaseSyncManager(trackStore, syncMetadataStore, supabaseClient)
         setContentView(R.layout.activity_main)
 
         bindViews()
@@ -128,6 +140,7 @@ class MainActivity : AppCompatActivity() {
         setupActions()
         loadSavedTracks()
         syncRecordingState()
+        updateAuthHeader()
 
         if (hasLocationPermission()) {
             enableMyLocation(follow = true)
@@ -156,6 +169,7 @@ class MainActivity : AppCompatActivity() {
         }
         loadSavedTracks()
         syncRecordingState()
+        syncTracksSilently()
     }
 
     override fun onPause() {
@@ -164,6 +178,11 @@ class MainActivity : AppCompatActivity() {
         map.onPause()
         super.onPause()
         elapsedHandler.removeCallbacks(elapsedTicker)
+    }
+
+    override fun onDestroy() {
+        backgroundExecutor.shutdown()
+        super.onDestroy()
     }
 
     private fun bindViews() {
@@ -200,6 +219,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupDrawer() {
+        authStatusText = navigationView.getHeaderView(0).findViewById(R.id.authStatusText)
+        authStatusText?.setOnClickListener {
+            drawerLayout.closeDrawer(GravityCompat.END)
+            showAuthEntry()
+        }
+
         navigationView.setNavigationItemSelectedListener { item ->
             drawerLayout.closeDrawer(GravityCompat.END)
             when (item.itemId) {
@@ -234,6 +259,182 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<MaterialButton>(R.id.closeSectionButton).setOnClickListener {
             hideSection()
+        }
+    }
+
+    private fun updateAuthHeader() {
+        val session = sessionStore.current()
+        authStatusText?.text = if (session == null) {
+            getString(R.string.sign_in_for_sync)
+        } else {
+            getString(R.string.signed_in_as, session.email ?: session.userId)
+        }
+    }
+
+    private fun showAuthEntry() {
+        val session = sessionStore.current()
+        if (session != null) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle(session.email ?: getString(R.string.app_name))
+                .setItems(arrayOf(getString(R.string.sync_now), getString(R.string.sign_out))) { _, which ->
+                    when (which) {
+                        0 -> syncTracks(showToast = true)
+                        1 -> {
+                            sessionStore.clear()
+                            updateAuthHeader()
+                            showTracksScreenIfVisible()
+                        }
+                    }
+                }
+                .show()
+            return
+        }
+
+        showEmailDialog()
+    }
+
+    private fun showEmailDialog() {
+        val input = EditText(this).apply {
+            hint = getString(R.string.email)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            setSingleLine(true)
+        }
+        val container = dialogInputContainer(input)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.enter_email_title)
+            .setView(container)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.continue_action) { _, _ ->
+                val email = input.text.toString().trim()
+                if (email.isNotBlank()) {
+                    showPasswordDialog(email)
+                }
+            }
+            .show()
+    }
+
+    private fun showPasswordDialog(email: String) {
+        val input = EditText(this).apply {
+            hint = getString(R.string.password)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setSingleLine(true)
+        }
+        val container = dialogInputContainer(input)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.enter_password_title)
+            .setView(container)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.sign_in) { _, _ ->
+                val password = input.text.toString()
+                if (password.isNotBlank()) {
+                    signInOrOfferSignup(email, password)
+                }
+            }
+            .show()
+    }
+
+    private fun signInOrOfferSignup(email: String, password: String) {
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.signIn(email, password)
+            }.onSuccess {
+                runOnUiThread {
+                    updateAuthHeader()
+                    syncTracks(showToast = true)
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    if ((error as? SupabaseException)?.isInvalidCredentials() == true) {
+                        showSignupOffer(email, password)
+                    } else {
+                        Toast.makeText(this, getString(R.string.auth_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showSignupOffer(email: String, password: String) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.create_account_offer_title)
+            .setMessage(R.string.create_account_offer_message)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.create_account) { _, _ ->
+                signUp(email, password)
+            }
+            .show()
+    }
+
+    private fun signUp(email: String, password: String) {
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.signUp(email, password)
+            }.onSuccess { session ->
+                runOnUiThread {
+                    if (session == null) {
+                        Toast.makeText(this, R.string.auth_email_confirmation, Toast.LENGTH_LONG).show()
+                    } else {
+                        updateAuthHeader()
+                        syncTracks(showToast = true)
+                    }
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    Toast.makeText(this, getString(R.string.auth_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun syncTracksSilently() {
+        if (sessionStore.current() != null) {
+            syncTracks(showToast = false)
+        }
+    }
+
+    private fun syncTracks(showToast: Boolean) {
+        if (sessionStore.current() == null) return
+        if (showToast) {
+            Toast.makeText(this, R.string.sync_started, Toast.LENGTH_SHORT).show()
+        }
+        backgroundExecutor.execute {
+            runCatching {
+                syncManager.sync()
+            }.onSuccess { result ->
+                runOnUiThread {
+                    updateAuthHeader()
+                    loadSavedTracks()
+                    showTracksScreenIfVisible()
+                    if (showToast) {
+                        Toast.makeText(
+                            this,
+                            getString(R.string.sync_finished, result.uploaded, result.downloaded),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    if (showToast) {
+                        Toast.makeText(this, getString(R.string.sync_failed, error.message ?: ""), Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showTracksScreenIfVisible() {
+        if (sectionPanel.visibility == View.VISIBLE && sectionTitle.text == getString(R.string.my_tracks)) {
+            showTracksScreen()
+        }
+    }
+
+    private fun dialogInputContainer(input: EditText): FrameLayout {
+        return FrameLayout(this).apply {
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(input)
         }
     }
 
@@ -333,8 +534,12 @@ class MainActivity : AppCompatActivity() {
             activeTrackPolyline?.let { map.overlays.remove(it) }
             activeTrackPolyline = null
             loadSavedTracks()
+            if (wasRecording) {
+                syncTracksSilently()
+            }
         }
 
+        wasRecording = isRecording
         map.invalidate()
     }
 
@@ -537,6 +742,19 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
+        if (!syncManager.isSynced(track)) {
+            header.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_cloud_off)
+                imageTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_text_secondary)
+                alpha = 0.3f
+                contentDescription = getString(R.string.unsynced_track)
+                layoutParams = LinearLayout.LayoutParams(dp(28), dp(40)).apply {
+                    rightMargin = dp(4)
+                }
+                setPadding(dp(2), dp(8), dp(2), dp(8))
+            })
+        }
+
         header.addView(MaterialButton(this).apply {
             backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
             background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
@@ -587,6 +805,7 @@ class MainActivity : AppCompatActivity() {
                     TRACK_ACTION_RENAME -> showRenameDialog(track)
                     TRACK_ACTION_VISIBILITY -> {
                         trackStore.setTrackVisibility(track, !track.visible)
+                        syncTracksSilently()
                         loadSavedTracks()
                         showTracksScreen()
                     }
@@ -615,6 +834,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.save) { _, _ ->
                 trackStore.renameTrack(track, input.text.toString().trim())
+                syncTracksSilently()
                 loadSavedTracks()
                 showTracksScreen()
             }
@@ -627,7 +847,9 @@ class MainActivity : AppCompatActivity() {
             .setMessage(R.string.delete_track_message)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.delete) { _, _ ->
+                syncManager.markDeleted(track)
                 trackStore.deleteTrack(track)
+                syncTracksSilently()
                 loadSavedTracks()
                 showTracksScreen()
             }

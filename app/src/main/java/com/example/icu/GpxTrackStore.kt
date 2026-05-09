@@ -63,6 +63,13 @@ class GpxTrackStore(private val context: Context) {
         return track.file.delete()
     }
 
+    fun saveImportedGpx(fileName: String, gpxBytes: ByteArray): RecordedTrack? {
+        val safeFileName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val file = File(tracksDirectory(), safeFileName)
+        file.writeBytes(gpxBytes)
+        return parseGpxTrack(file)
+    }
+
     private fun writeTrack(track: RecordedTrack) {
         track.file.outputStream().use { stream ->
             val serializer = Xml.newSerializer()
