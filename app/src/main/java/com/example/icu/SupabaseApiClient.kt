@@ -172,17 +172,18 @@ class SupabaseApiClient(
         return response.text.trim().trim('"')
     }
 
-    fun acceptFriendInvite(session: SupabaseSession, token: String) {
+    fun acceptFriendInvite(session: SupabaseSession, token: String): String {
         val body = JSONObject()
             .put("invite_token", token)
             .toString()
             .toByteArray(Charsets.UTF_8)
-        request(
+        val response = request(
             method = "POST",
             url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/accept_friend_invite",
             headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
             body = body
         )
+        return response.text.trim().trim('"')
     }
 
     fun fetchFriends(session: SupabaseSession): List<FriendProfile> {

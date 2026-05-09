@@ -55,6 +55,17 @@
                     android:host="friend-invite"
                     android:scheme="icu" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="jjinirtbtgkyesewvyux.supabase.co"
+                    android:pathPrefix="/functions/v1/friend-invite"
+                    android:scheme="https" />
+            </intent-filter>
         </activity>
     </application>
 

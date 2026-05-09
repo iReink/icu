@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.GradientDrawable
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -90,6 +91,7 @@ class MainActivity : AppCompatActivity() {
     private var addTrackSheet: BottomSheetDialog? = null
     private var pendingStartType: TrackType? = null
     private var pendingInviteToken: String? = null
+    private var highlightedFriendshipId: String? = null
     private var savedTrackOverlays = mutableListOf<Polyline>()
     private var friendLocationOverlays = mutableListOf<org.osmdroid.views.overlay.Overlay>()
     private var activeTrackPolyline: Polyline? = null
@@ -339,7 +341,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleFriendInvite(intent: Intent?) {
         val data = intent?.data ?: return
-        if (data.scheme != "icu" || data.host != "friend-invite") return
+        val isAppInvite = data.scheme == "icu" && data.host == "friend-invite"
+        val isHttpsInvite = data.scheme == "https" &&
+            data.host == "jjinirtbtgkyesewvyux.supabase.co" &&
+            data.path == "/functions/v1/friend-invite"
+        if (!isAppInvite && !isHttpsInvite) return
         val token = data.getQueryParameter("token") ?: return
         pendingInviteToken = token
         if (sessionStore.current() == null) {
@@ -1088,8 +1094,14 @@ class MainActivity : AppCompatActivity() {
             sectionContent.addView(emptyStateText(getString(R.string.no_friends)))
         } else {
             friends.forEach { friend ->
-                sectionContent.addView(friendCard(friend))
+                sectionContent.addView(friendCard(friend, friend.friendshipId == highlightedFriendshipId))
             }
+        }
+        if (highlightedFriendshipId != null) {
+            elapsedHandler.postDelayed({
+                highlightedFriendshipId = null
+                if (currentSection == Section.PROFILE) showProfileScreen()
+            }, FRIEND_HIGHLIGHT_DURATION_MS)
         }
         sectionContent.addView(destructiveGhostButton(getString(R.string.sign_out)) {
             sessionStore.clear()
@@ -1103,7 +1115,7 @@ class MainActivity : AppCompatActivity() {
             runCatching {
                 val session = supabaseClient.activeSession()
                 val token = supabaseClient.createFriendInvite(session)
-                "icu://friend-invite?token=$token"
+                "${SupabaseConfig.FRIEND_INVITE_URL}?token=$token"
             }.onSuccess { link ->
                 runOnUiThread {
                     val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -1129,11 +1141,13 @@ class MainActivity : AppCompatActivity() {
         backgroundExecutor.execute {
             runCatching {
                 supabaseClient.acceptFriendInvite(supabaseClient.activeSession(), token)
-            }.onSuccess {
+            }.onSuccess { friendshipId ->
                 pendingInviteToken = null
+                highlightedFriendshipId = friendshipId
                 runOnUiThread {
+                    bottomNavigation.selectedItemId = R.id.navProfile
                     showSnackbar(getString(R.string.friend_added), isLong = true)
-                    if (currentSection == Section.PROFILE) showProfileScreen()
+                    showProfileScreen()
                 }
             }.onFailure { error ->
                 runOnUiThread {
@@ -1641,11 +1655,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun friendCard(friend: FriendProfile): View {
+    private fun friendCard(friend: FriendProfile, highlighted: Boolean = false): View {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundResource(R.drawable.bg_track_cell)
+            if (highlighted) {
+                background = GradientDrawable().apply {
+                    setColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_surface))
+                    cornerRadius = dp(8).toFloat()
+                }
+                alpha = 0.55f
+                animate().alpha(1f).setDuration(260).start()
+            } else {
+                setBackgroundResource(R.drawable.bg_track_cell)
+            }
             setPadding(dp(14), dp(10), dp(6), dp(10))
             setOnClickListener { showFriendOnMap(friend) }
             layoutParams = LinearLayout.LayoutParams(
@@ -1964,5 +1987,6 @@ class MainActivity : AppCompatActivity() {
         private const val FRIEND_ACTION_DELETE = 11
         private const val TRACK_STROKE_WIDTH = 8f
         private const val TIMER_INTERVAL_MS = 1_000L
+        private const val FRIEND_HIGHLIGHT_DURATION_MS = 3_500L
     }
 }
