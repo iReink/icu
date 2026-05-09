@@ -10,6 +10,10 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -20,6 +24,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -32,16 +37,14 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.widget.PopupMenu
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
-import androidx.core.view.GravityCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.drawerlayout.widget.DrawerLayout
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import com.google.android.material.navigation.NavigationView
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
@@ -53,6 +56,7 @@ import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
@@ -65,15 +69,13 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var drawerLayout: DrawerLayout
-    private lateinit var navigationView: NavigationView
     private lateinit var map: MapView
     private lateinit var recordingPanel: View
     private lateinit var distanceText: TextView
     private lateinit var durationText: TextView
     private lateinit var addTrackFab: FloatingActionButton
     private lateinit var myLocationButton: FloatingActionButton
-    private lateinit var menuButton: FloatingActionButton
+    private lateinit var bottomNavigation: BottomNavigationView
     private lateinit var sectionPanel: LinearLayout
     private lateinit var sectionTitle: TextView
     private lateinit var sectionContent: LinearLayout
@@ -82,19 +84,28 @@ class MainActivity : AppCompatActivity() {
     private lateinit var syncMetadataStore: SyncMetadataStore
     private lateinit var supabaseClient: SupabaseApiClient
     private lateinit var syncManager: SupabaseSyncManager
+    private lateinit var appLocationManager: LocationManager
+    private lateinit var liveLocationUploader: LiveLocationUploader
 
     private var locationOverlay: MyLocationNewOverlay? = null
     private var addTrackSheet: BottomSheetDialog? = null
     private var pendingStartType: TrackType? = null
-    private var authStatusText: TextView? = null
+    private var pendingInviteToken: String? = null
     private var savedTrackOverlays = mutableListOf<Polyline>()
+    private var friendLocationOverlays = mutableListOf<org.osmdroid.views.overlay.Overlay>()
     private var activeTrackPolyline: Polyline? = null
     private var isReceiverRegistered = false
     private var shouldFollowLocation = true
     private var wasRecording = false
     private var currentSection: Section = Section.NONE
+    private var currentAuthStep: AuthStep = AuthStep.NONE
     private var authRootView: LinearLayout? = null
+    private var lastForegroundLiveUploadMillis = 0L
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
+
+    private val foregroundLocationListener = LocationListener { location ->
+        uploadForegroundLiveLocation(location)
+    }
 
     private val elapsedHandler = Handler(Looper.getMainLooper())
     private val elapsedTicker = object : Runnable {
@@ -142,17 +153,20 @@ class MainActivity : AppCompatActivity() {
         syncMetadataStore = SyncMetadataStore(this)
         supabaseClient = SupabaseApiClient(sessionStore)
         syncManager = SupabaseSyncManager(trackStore, syncMetadataStore, supabaseClient)
+        appLocationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        liveLocationUploader = LiveLocationUploader(this)
         setContentView(R.layout.activity_main)
 
         bindViews()
         setupImeInsets()
         setupMap()
-        setupDrawer()
+        setupBottomNavigation()
         setupActions()
         loadSavedTracks()
         syncRecordingState()
         updateAuthHeader()
         handleAuthCallback(intent)
+        handleFriendInvite(intent)
 
         if (hasLocationPermission()) {
             enableMyLocation(follow = true)
@@ -163,8 +177,7 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
-                    sectionPanel.visibility == View.VISIBLE -> hideSection()
-                    drawerLayout.isDrawerOpen(GravityCompat.END) -> drawerLayout.closeDrawer(GravityCompat.END)
+                    sectionPanel.visibility == View.VISIBLE -> handleSectionBack()
                     else -> finish()
                 }
             }
@@ -182,10 +195,12 @@ class MainActivity : AppCompatActivity() {
         loadSavedTracks()
         syncRecordingState()
         syncTracksSilently()
+        requestForegroundLiveLocationUpdates()
     }
 
     override fun onPause() {
         locationOverlay?.disableMyLocation()
+        stopForegroundLiveLocationUpdates()
         unregisterRecordingReceiver()
         map.onPause()
         super.onPause()
@@ -201,18 +216,17 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleAuthCallback(intent)
+        handleFriendInvite(intent)
     }
 
     private fun bindViews() {
-        drawerLayout = findViewById(R.id.drawerLayout)
-        navigationView = findViewById(R.id.navigationView)
         map = findViewById(R.id.map)
         recordingPanel = findViewById(R.id.recordingPanel)
         distanceText = findViewById(R.id.distanceText)
         durationText = findViewById(R.id.durationText)
         addTrackFab = findViewById(R.id.addTrackFab)
         myLocationButton = findViewById(R.id.myLocationButton)
-        menuButton = findViewById(R.id.menuButton)
+        bottomNavigation = findViewById(R.id.bottomNavigation)
         sectionPanel = findViewById(R.id.sectionPanel)
         sectionTitle = findViewById(R.id.sectionTitle)
         sectionContent = findViewById(R.id.sectionContent)
@@ -250,29 +264,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupDrawer() {
-        authStatusText = navigationView.getHeaderView(0).findViewById(R.id.authStatusText)
-        authStatusText?.setOnClickListener {
-            drawerLayout.closeDrawer(GravityCompat.END)
-            showAuthEntry()
-        }
-
-        navigationView.setNavigationItemSelectedListener { item ->
-            drawerLayout.closeDrawer(GravityCompat.END)
+    private fun setupBottomNavigation() {
+        bottomNavigation.setOnItemSelectedListener { item ->
             when (item.itemId) {
-                R.id.menuMyTracks -> showTracksScreen()
-                R.id.menuStatistics -> showStatisticsScreen()
-                R.id.menuSettings -> showSettingsScreen()
+                R.id.navMap -> {
+                    hideSection()
+                    true
+                }
+                R.id.navTracks -> {
+                    showTracksScreen()
+                    true
+                }
+                R.id.navStatistics -> {
+                    showStatisticsScreen()
+                    true
+                }
+                R.id.navProfile -> {
+                    showProfileScreen()
+                    true
+                }
+                else -> false
             }
-            true
         }
     }
 
     private fun setupActions() {
-        menuButton.setOnClickListener {
-            drawerLayout.openDrawer(GravityCompat.END)
-        }
-
         myLocationButton.setOnClickListener {
             if (hasLocationPermission()) {
                 enableMyLocation(follow = true)
@@ -290,8 +306,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<MaterialButton>(R.id.closeSectionButton).setOnClickListener {
-            hideSection()
+            handleSectionBack()
         }
+    }
+
+    private fun handleSectionBack() {
+        if (currentSection == Section.AUTH && currentAuthStep == AuthStep.PASSWORD) {
+            showAuthEmailScreen()
+            return
+        }
+        hideKeyboard()
+        hideSection()
+        bottomNavigation.selectedItemId = R.id.navMap
     }
 
     private fun handleAuthCallback(intent: Intent?) {
@@ -301,13 +327,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateAuthHeader() {
-        val session = sessionStore.current()
-        authStatusText?.text = if (session == null) {
-            getString(R.string.sign_in_for_sync)
+    private fun handleFriendInvite(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (data.scheme != "icu" || data.host != "friend-invite") return
+        val token = data.getQueryParameter("token") ?: return
+        pendingInviteToken = token
+        if (sessionStore.current() == null) {
+            bottomNavigation.selectedItemId = R.id.navProfile
+            showSnackbar(getString(R.string.sign_in_to_accept_friend), isLong = true)
+            showAuthEntry()
         } else {
-            getString(R.string.signed_in_as, session.email ?: session.userId)
+            acceptFriendInvite(token)
         }
+    }
+
+    private fun updateAuthHeader() {
+        if (currentSection == Section.PROFILE) showProfileScreen()
     }
 
     private fun showAuthEntry() {
@@ -334,6 +369,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAuthEmailScreen() {
         currentSection = Section.AUTH
+        currentAuthStep = AuthStep.EMAIL
         showSection(getString(R.string.sign_in))
 
         val emailInput = TextInputEditText(this).apply {
@@ -363,7 +399,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkEmailAndShowPassword(email: String) {
-        showSnackbar(getString(R.string.checking_email))
         backgroundExecutor.execute {
             runCatching {
                 supabaseClient.emailExists(email)
@@ -381,6 +416,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAuthPasswordScreen(email: String, emailExists: Boolean) {
         currentSection = Section.AUTH
+        currentAuthStep = AuthStep.PASSWORD
         showSection(if (emailExists) getString(R.string.sign_in) else getString(R.string.create_account))
 
         val emailText = TextView(this).apply {
@@ -452,7 +488,11 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     sessionStore.clearPendingEmail()
                     updateAuthHeader()
+                    acceptPendingInviteIfNeeded()
+                    hideKeyboard()
                     hideSection()
+                    bottomNavigation.selectedItemId = R.id.navMap
+                    requestForegroundLiveLocationUpdates()
                     syncTracks(showToast = true)
                 }
             }.onFailure { error ->
@@ -475,7 +515,11 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         sessionStore.clearPendingEmail()
                         updateAuthHeader()
+                        acceptPendingInviteIfNeeded()
+                        hideKeyboard()
                         hideSection()
+                        bottomNavigation.selectedItemId = R.id.navMap
+                        requestForegroundLiveLocationUpdates()
                         syncTracks(showToast = true)
                     }
                 }
@@ -489,6 +533,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showAuthCheckEmailScreen(email: String) {
         currentSection = Section.AUTH
+        currentAuthStep = AuthStep.MESSAGE
         showSection(getString(R.string.create_account))
 
         val title = TextView(this).apply {
@@ -523,6 +568,7 @@ class MainActivity : AppCompatActivity() {
     private fun showAuthSuccessScreen() {
         val pendingEmail = sessionStore.pendingEmail()
         currentSection = Section.AUTH
+        currentAuthStep = AuthStep.MESSAGE
         showSection(getString(R.string.create_account))
 
         val title = TextView(this).apply {
@@ -611,6 +657,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 input.setTextColor(textColor)
                 input.setHintTextColor(secondaryColor)
+                input.highlightColor = Color.TRANSPARENT
+                input.backgroundTintList = ColorStateList.valueOf(surfaceColor)
                 addView(input)
                 if (isPassword) {
                     input.transformationMethod = PasswordTransformationMethod.getInstance()
@@ -678,7 +726,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = dp(24)
+                bottomMargin = dp(32)
             }
 
             if (secondaryText != null && onSecondary != null) {
@@ -766,6 +814,13 @@ class MainActivity : AppCompatActivity() {
                 else -> null
             }
         }.show()
+    }
+
+    private fun hideKeyboard() {
+        val view = currentFocus ?: findViewById<View>(R.id.mainContent)
+        val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        inputMethodManager.hideSoftInputFromWindow(view.windowToken, 0)
+        view.clearFocus()
     }
 
     private fun userMessage(error: Throwable): String {
@@ -860,7 +915,6 @@ class MainActivity : AppCompatActivity() {
         recordingPanel.visibility = if (isRecording && !isSectionVisible) View.VISIBLE else View.GONE
         addTrackFab.visibility = if (!isRecording && !isSectionVisible) View.VISIBLE else View.GONE
         myLocationButton.visibility = if (!isSectionVisible) View.VISIBLE else View.GONE
-        menuButton.visibility = if (!isRecording && !isSectionVisible) View.VISIBLE else View.GONE
 
         if (isRecording) {
             updateRecordingPanelTime()
@@ -989,22 +1043,156 @@ class MainActivity : AppCompatActivity() {
         sectionContent.addView(settingsRow())
     }
 
+    private fun showProfileScreen() {
+        currentSection = Section.PROFILE
+        showSection(getString(R.string.profile))
+        setSectionContentPadding(horizontalDp = 20)
+        val session = sessionStore.current()
+        if (session == null) {
+            sectionContent.addView(profileStatusCard(getString(R.string.sign_in_for_sync)))
+            sectionContent.addView(primaryFullWidthButton(getString(R.string.sign_in)) {
+                showAuthEntry()
+            })
+            return
+        }
+
+        sectionContent.addView(profileStatusCard(session.email ?: session.userId))
+        sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
+            shareFriendInvite()
+        })
+        sectionContent.addView(groupTitle(getString(R.string.friends)))
+        sectionContent.addView(emptyStateText(getString(R.string.loading)))
+        loadFriends()
+        sectionContent.addView(destructiveGhostButton(getString(R.string.sign_out)) {
+            sessionStore.clear()
+            stopForegroundLiveLocationUpdates()
+            showProfileScreen()
+        })
+    }
+
+    private fun loadFriends() {
+        val session = sessionStore.current() ?: return
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.fetchFriends(supabaseClient.activeSession())
+            }.onSuccess { friends ->
+                runOnUiThread {
+                    if (currentSection == Section.PROFILE) {
+                        renderProfileWithFriends(session, friends)
+                    }
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    if (currentSection == Section.PROFILE) {
+                        showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun renderProfileWithFriends(session: SupabaseSession, friends: List<FriendProfile>) {
+        sectionContent.removeAllViews()
+        setSectionContentPadding(horizontalDp = 20)
+        sectionContent.addView(profileStatusCard(session.email ?: session.userId))
+        sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
+            shareFriendInvite()
+        })
+        sectionContent.addView(groupTitle(getString(R.string.friends)))
+        if (friends.isEmpty()) {
+            sectionContent.addView(emptyStateText(getString(R.string.no_friends)))
+        } else {
+            friends.forEach { friend ->
+                sectionContent.addView(friendCard(friend))
+            }
+        }
+        sectionContent.addView(destructiveGhostButton(getString(R.string.sign_out)) {
+            sessionStore.clear()
+            stopForegroundLiveLocationUpdates()
+            showProfileScreen()
+        })
+    }
+
+    private fun shareFriendInvite() {
+        backgroundExecutor.execute {
+            runCatching {
+                val session = supabaseClient.activeSession()
+                val token = supabaseClient.createFriendInvite(session)
+                "icu://friend-invite?token=$token"
+            }.onSuccess { link ->
+                runOnUiThread {
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, getString(R.string.friend_invite_share_text, link))
+                    }
+                    startActivity(Intent.createChooser(shareIntent, getString(R.string.add_friend_by_link)))
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun acceptPendingInviteIfNeeded() {
+        val token = pendingInviteToken ?: return
+        acceptFriendInvite(token)
+    }
+
+    private fun acceptFriendInvite(token: String) {
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.acceptFriendInvite(supabaseClient.activeSession(), token)
+            }.onSuccess {
+                pendingInviteToken = null
+                runOnUiThread {
+                    showSnackbar(getString(R.string.friend_added), isLong = true)
+                    if (currentSection == Section.PROFILE) showProfileScreen()
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun showFriendOnMap(friend: FriendProfile) {
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.fetchFriendLocations(supabaseClient.activeSession(), friend.userId)
+            }.onSuccess { points ->
+                runOnUiThread {
+                    hideSection()
+                    bottomNavigation.selectedItemId = R.id.navMap
+                    drawFriendLocations(friend, points)
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
     private fun showSection(title: String) {
         sectionTitle.text = title
         sectionContent.removeAllViews()
         authRootView = null
+        findViewById<MaterialButton>(R.id.closeSectionButton).visibility =
+            if (currentSection == Section.AUTH) View.VISIBLE else View.INVISIBLE
         sectionPanel.visibility = View.VISIBLE
         addTrackFab.visibility = View.GONE
         myLocationButton.visibility = View.GONE
-        menuButton.visibility = View.GONE
         recordingPanel.visibility = View.GONE
-        drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
     }
 
     private fun hideSection() {
         sectionPanel.visibility = View.GONE
         currentSection = Section.NONE
-        drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
+        currentAuthStep = AuthStep.NONE
+        authRootView = null
         syncRecordingState()
     }
 
@@ -1424,6 +1612,161 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun profileStatusCard(textValue: String): View {
+        return contentCard().apply {
+            addView(cardTitle(getString(R.string.profile), ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink)))
+            addView(TextView(this@MainActivity).apply {
+                text = textValue
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                textSize = 16f
+            })
+        }
+    }
+
+    private fun primaryFullWidthButton(textValue: String, onClick: () -> Unit): View {
+        return MaterialButton(this).apply {
+            text = textValue
+            isAllCaps = false
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52)
+            ).apply {
+                bottomMargin = dp(12)
+            }
+        }
+    }
+
+    private fun destructiveGhostButton(textValue: String, onClick: () -> Unit): View {
+        return MaterialButton(this).apply {
+            text = textValue
+            isAllCaps = false
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_danger))
+            elevation = 0f
+            stateListAnimator = null
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52)
+            ).apply {
+                topMargin = dp(20)
+                bottomMargin = dp(24)
+            }
+        }
+    }
+
+    private fun friendCard(friend: FriendProfile): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.bg_track_cell)
+            setPadding(dp(14), dp(10), dp(6), dp(10))
+            setOnClickListener { showFriendOnMap(friend) }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(6)
+            }
+        }
+        card.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            addView(TextView(this@MainActivity).apply {
+                text = friend.email.ifBlank { friend.userId }
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 16f
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = if (friend.iShare) getString(R.string.sharing_location_enabled) else getString(R.string.sharing_location_disabled)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 13f
+            })
+        })
+        card.addView(MaterialButton(this).apply {
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
+            elevation = 0f
+            stateListAnimator = null
+            minWidth = 0
+            minimumWidth = 0
+            minimumHeight = dp(40)
+            setPadding(0, 0, 0, 0)
+            setIconResource(R.drawable.ic_kebab_vertical)
+            iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+            iconPadding = 0
+            setOnClickListener { anchor -> showFriendMenu(anchor, friend) }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+        })
+        return card
+    }
+
+    private fun showFriendMenu(anchor: View, friend: FriendProfile) {
+        PopupMenu(this, anchor).apply {
+            menu.add(0, FRIEND_ACTION_SHARE, 0, if (friend.iShare) R.string.hide_myself else R.string.share_location)
+            menu.add(0, FRIEND_ACTION_DELETE, 1, R.string.delete_friend)
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    FRIEND_ACTION_SHARE -> setFriendShare(friend, !friend.iShare)
+                    FRIEND_ACTION_DELETE -> deleteFriend(friend)
+                }
+                true
+            }
+            show()
+        }
+    }
+
+    private fun setFriendShare(friend: FriendProfile, isSharing: Boolean) {
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.setFriendShare(supabaseClient.activeSession(), friend.friendshipId, isSharing)
+            }.onSuccess {
+                runOnUiThread { showProfileScreen() }
+            }
+        }
+    }
+
+    private fun deleteFriend(friend: FriendProfile) {
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.deleteFriend(supabaseClient.activeSession(), friend.friendshipId)
+            }.onSuccess {
+                runOnUiThread { showProfileScreen() }
+            }
+        }
+    }
+
+    private fun drawFriendLocations(friend: FriendProfile, points: List<LocationSharePoint>) {
+        friendLocationOverlays.forEach { map.overlays.remove(it) }
+        friendLocationOverlays.clear()
+        if (points.isEmpty()) {
+            showSnackbar(getString(R.string.no_friend_locations), isLong = true)
+            return
+        }
+        val polyline = Polyline(map).apply {
+            outlinePaint.color = ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink)
+            outlinePaint.strokeWidth = TRACK_STROKE_WIDTH
+            outlinePaint.isAntiAlias = true
+            setPoints(points.map { GeoPoint(it.latitude, it.longitude) })
+        }
+        val last = points.last()
+        val marker = Marker(map).apply {
+            position = GeoPoint(last.latitude, last.longitude)
+            title = friend.email
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+        }
+        friendLocationOverlays.add(polyline)
+        friendLocationOverlays.add(marker)
+        map.overlays.add(polyline)
+        map.overlays.add(marker)
+        map.controller.animateTo(marker.position)
+        map.controller.setZoom(17.0)
+        marker.showInfoWindow()
+        map.invalidate()
+    }
+
     private fun registerRecordingReceiver() {
         if (isReceiverRegistered) return
         val filter = IntentFilter(TrackRecordingService.ACTION_STATE_CHANGED)
@@ -1511,6 +1854,42 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun requestForegroundLiveLocationUpdates() {
+        if (!hasLocationPermission() || sessionStore.current() == null) return
+        val provider = when {
+            appLocationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+            appLocationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+            else -> return
+        }
+        try {
+            appLocationManager.requestLocationUpdates(
+                provider,
+                TrackRecordingService.LIVE_LOCATION_INTERVAL_MS,
+                0f,
+                foregroundLocationListener
+            )
+            appLocationManager.getLastKnownLocation(provider)
+                ?.takeIf { System.currentTimeMillis() - it.time <= 120_000L }
+                ?.let { uploadForegroundLiveLocation(it) }
+        } catch (_: SecurityException) {
+            return
+        }
+    }
+
+    private fun stopForegroundLiveLocationUpdates() {
+        appLocationManager.removeUpdates(foregroundLocationListener)
+    }
+
+    private fun uploadForegroundLiveLocation(location: Location) {
+        if (TrackRecordingService.currentState.isRecording) return
+        val now = System.currentTimeMillis()
+        if (now - lastForegroundLiveUploadMillis < TrackRecordingService.LIVE_LOCATION_INTERVAL_MS) return
+        lastForegroundLiveUploadMillis = now
+        backgroundExecutor.execute {
+            liveLocationUploader.enqueueAndFlush(location)
+        }
+    }
+
     private fun formatMonthTitle(month: YearMonth): String {
         val formatter = DateTimeFormatter.ofPattern("LLLL, yyyy", Locale.forLanguageTag("ru-RU"))
         return month.format(formatter).replaceFirstChar { char ->
@@ -1557,7 +1936,15 @@ class MainActivity : AppCompatActivity() {
         TRACKS,
         STATISTICS,
         SETTINGS,
+        PROFILE,
         AUTH
+    }
+
+    private enum class AuthStep {
+        NONE,
+        EMAIL,
+        PASSWORD,
+        MESSAGE
     }
 
     private inner class StatsPagerAdapter(
@@ -1588,6 +1975,8 @@ class MainActivity : AppCompatActivity() {
         private const val TRACK_ACTION_RENAME = 1
         private const val TRACK_ACTION_VISIBILITY = 2
         private const val TRACK_ACTION_DELETE = 3
+        private const val FRIEND_ACTION_SHARE = 10
+        private const val FRIEND_ACTION_DELETE = 11
         private const val TRACK_STROKE_WIDTH = 8f
         private const val TIMER_INTERVAL_MS = 1_000L
     }

@@ -162,6 +162,115 @@ class SupabaseApiClient(
         )
     }
 
+    fun createFriendInvite(session: SupabaseSession): String {
+        val response = request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/create_friend_invite",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = "{}".toByteArray(Charsets.UTF_8)
+        )
+        return response.text.trim().trim('"')
+    }
+
+    fun acceptFriendInvite(session: SupabaseSession, token: String) {
+        val body = JSONObject()
+            .put("invite_token", token)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/accept_friend_invite",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = body
+        )
+    }
+
+    fun fetchFriends(session: SupabaseSession): List<FriendProfile> {
+        val response = request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/friend_list",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = "{}".toByteArray(Charsets.UTF_8)
+        )
+        val array = JSONArray(response.text)
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            FriendProfile(
+                friendshipId = item.getString("friendship_id"),
+                userId = item.getString("friend_id"),
+                email = item.optString("friend_email", ""),
+                iShare = item.optBoolean("i_share", true),
+                friendShares = item.optBoolean("friend_shares", true)
+            )
+        }
+    }
+
+    fun setFriendShare(session: SupabaseSession, friendshipId: String, isSharing: Boolean) {
+        val body = JSONObject()
+            .put("friendship", friendshipId)
+            .put("share_enabled", isSharing)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/set_friend_share",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = body
+        )
+    }
+
+    fun deleteFriend(session: SupabaseSession, friendshipId: String) {
+        request(
+            method = "DELETE",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/friendships?id=eq.$friendshipId",
+            headers = authHeaders(session) + mapOf("Prefer" to "return=minimal")
+        )
+    }
+
+    fun uploadLocationPoints(session: SupabaseSession, points: List<LocationSharePoint>) {
+        if (points.isEmpty()) return
+        val body = JSONArray()
+        points.forEach { point ->
+            val json = JSONObject()
+                .put("user_id", session.userId)
+                .put("latitude", point.latitude)
+                .put("longitude", point.longitude)
+                .put("recorded_at", Instant.ofEpochMilli(point.recordedAtMillis).toString())
+            point.altitude?.let { json.put("altitude", it) }
+            point.accuracyMeters?.let { json.put("accuracy_meters", it.toDouble()) }
+            body.put(json)
+        }
+        request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/location_points",
+            headers = authHeaders(session) + mapOf(
+                "Content-Type" to "application/json",
+                "Prefer" to "return=minimal"
+            ),
+            body = body.toString().toByteArray(Charsets.UTF_8)
+        )
+    }
+
+    fun fetchFriendLocations(session: SupabaseSession, friendId: String): List<LocationSharePoint> {
+        val since = Instant.now().minusSeconds(24 * 60 * 60).toString()
+        val response = request(
+            method = "GET",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/location_points?select=*&user_id=eq.$friendId&recorded_at=gte.$since&order=recorded_at.asc",
+            headers = authHeaders(session)
+        )
+        val array = JSONArray(response.text)
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            LocationSharePoint(
+                latitude = item.getDouble("latitude"),
+                longitude = item.getDouble("longitude"),
+                altitude = item.optDoubleOrNull("altitude"),
+                accuracyMeters = item.optDoubleOrNull("accuracy_meters")?.toFloat(),
+                recordedAtMillis = Instant.parse(item.getString("recorded_at")).toEpochMilli()
+            )
+        }
+    }
+
     private fun parseSession(json: JSONObject, fallbackEmail: String?): SupabaseSession {
         val user = json.getJSONObject("user")
         val expiresInSeconds = json.optLong("expires_in", DEFAULT_EXPIRES_IN_SECONDS)
@@ -274,6 +383,10 @@ class SupabaseApiClient(
     }
 }
 
+private fun JSONObject.optDoubleOrNull(name: String): Double? {
+    return if (has(name) && !isNull(name)) optDouble(name) else null
+}
+
 private fun String.urlEncoded(): String {
     return URLEncoder.encode(this, Charsets.UTF_8.name())
 }
@@ -295,6 +408,22 @@ data class RemoteTrack(
 data class HttpResult(
     val bytes: ByteArray,
     val text: String
+)
+
+data class FriendProfile(
+    val friendshipId: String,
+    val userId: String,
+    val email: String,
+    val iShare: Boolean,
+    val friendShares: Boolean
+)
+
+data class LocationSharePoint(
+    val latitude: Double,
+    val longitude: Double,
+    val altitude: Double?,
+    val accuracyMeters: Float?,
+    val recordedAtMillis: Long
 )
 
 class SupabaseException(

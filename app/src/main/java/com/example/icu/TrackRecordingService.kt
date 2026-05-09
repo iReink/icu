@@ -22,10 +22,12 @@ import java.util.Locale
 class TrackRecordingService : Service() {
     private lateinit var locationManager: LocationManager
     private lateinit var trackStore: GpxTrackStore
+    private lateinit var liveLocationUploader: LiveLocationUploader
 
     private var recordingType: TrackType? = null
     private var recordingStartedAtMillis: Long = 0L
     private var recordingDistanceMeters: Float = 0f
+    private var lastLiveLocationUploadMillis = 0L
     private val recordingPoints = mutableListOf<TrackPoint>()
 
     private val locationListener = LocationListener { location ->
@@ -36,6 +38,7 @@ class TrackRecordingService : Service() {
         super.onCreate()
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         trackStore = GpxTrackStore(this)
+        liveLocationUploader = LiveLocationUploader(this)
         createNotificationChannel()
     }
 
@@ -74,6 +77,7 @@ class TrackRecordingService : Service() {
         recordingType = type
         recordingStartedAtMillis = System.currentTimeMillis()
         recordingDistanceMeters = 0f
+        lastLiveLocationUploadMillis = 0L
         recordingPoints.clear()
         currentState = RecordingState(
             isRecording = true,
@@ -98,6 +102,7 @@ class TrackRecordingService : Service() {
         recordingType = null
         recordingStartedAtMillis = 0L
         recordingDistanceMeters = 0f
+        lastLiveLocationUploadMillis = 0L
         recordingPoints.clear()
 
         if (type != null && points.isNotEmpty()) {
@@ -157,6 +162,7 @@ class TrackRecordingService : Service() {
         }
 
         recordingPoints.add(point)
+        uploadLiveLocationIfNeeded(location)
         currentState = RecordingState(
             isRecording = true,
             type = type,
@@ -166,6 +172,15 @@ class TrackRecordingService : Service() {
         )
         updateNotification()
         broadcastStateChanged()
+    }
+
+    private fun uploadLiveLocationIfNeeded(location: Location) {
+        val now = System.currentTimeMillis()
+        if (now - lastLiveLocationUploadMillis < LIVE_LOCATION_INTERVAL_MS) return
+        lastLiveLocationUploadMillis = now
+        Thread {
+            liveLocationUploader.enqueueAndFlush(location)
+        }.start()
     }
 
     private fun isUsableTrackLocation(location: Location): Boolean {
@@ -289,6 +304,7 @@ class TrackRecordingService : Service() {
         const val BIKE_INTERVAL_MS = 2_000L
         const val MAX_ACCEPTED_ACCURACY_METERS = 50f
         const val MIN_DISTANCE_FOR_DISTANCE_METERS = 3f
+        const val LIVE_LOCATION_INTERVAL_MS = 10_000L
 
         private const val CHANNEL_ID = "track_recording"
         private const val NOTIFICATION_ID = 1001

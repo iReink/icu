@@ -70,4 +70,19 @@
     <string name="sync_finished">Синхронизация завершена: выгружено %1$d, загружено %2$d</string>
     <string name="sync_failed">Не удалось синхронизировать: %1$s</string>
     <string name="unsynced_track">Трек ещё не синхронизирован</string>
+    <string name="map">Карта</string>
+    <string name="profile">Профиль</string>
+    <string name="friends">Друзья</string>
+    <string name="loading">Загрузка…</string>
+    <string name="no_friends">Пока нет друзей</string>
+    <string name="add_friend_by_link">Добавить друга по ссылке</string>
+    <string name="friend_invite_share_text">Добавь меня в друзья в ICU: %1$s</string>
+    <string name="friend_added">Друг добавлен</string>
+    <string name="sign_in_to_accept_friend">Войдите, чтобы принять приглашение в друзья</string>
+    <string name="sharing_location_enabled">Вы делитесь позицией</string>
+    <string name="sharing_location_disabled">Вы не показываете себя</string>
+    <string name="share_location">Делиться позицией</string>
+    <string name="hide_myself">Не показывать себя</string>
+    <string name="delete_friend">Удалить из друзей</string>
+    <string name="no_friend_locations">Нет точек за последние сутки</string>
 </resources>
