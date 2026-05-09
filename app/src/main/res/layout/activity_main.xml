@@ -20,7 +20,7 @@
             android:layout_width="56dp"
             android:layout_height="56dp"
             android:layout_gravity="top|end"
-            android:layout_marginTop="40dp"
+            android:layout_marginTop="48dp"
             android:layout_marginEnd="24dp"
             android:contentDescription="@string/menu"
             app:backgroundTint="@color/white"
@@ -114,6 +114,7 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:background="@color/icu_screen_surface"
+            android:elevation="16dp"
             android:orientation="vertical"
             android:visibility="gone">
 

@@ -34,6 +34,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.navigation.NavigationView
 import com.google.android.material.switchmaterial.SwitchMaterial
+import com.google.android.material.tabs.TabLayout
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -43,6 +44,7 @@ import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import java.time.Instant
+import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -92,8 +94,12 @@ class MainActivity : AppCompatActivity() {
         }
 
     private val notificationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            startPendingRecording()
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+            if (isGranted) {
+                startPendingRecording()
+            } else {
+                pendingStartType = null
+            }
         }
 
     private val recordingStateReceiver = object : BroadcastReceiver() {
@@ -293,10 +299,12 @@ class MainActivity : AppCompatActivity() {
     private fun syncRecordingState() {
         val state = TrackRecordingService.currentState
         val isRecording = state.isRecording
+        val isSectionVisible = sectionPanel.visibility == View.VISIBLE
 
-        recordingPanel.visibility = if (isRecording) View.VISIBLE else View.GONE
-        addTrackFab.visibility = if (isRecording) View.GONE else View.VISIBLE
-        menuButton.visibility = if (isRecording) View.GONE else View.VISIBLE
+        recordingPanel.visibility = if (isRecording && !isSectionVisible) View.VISIBLE else View.GONE
+        addTrackFab.visibility = if (!isRecording && !isSectionVisible) View.VISIBLE else View.GONE
+        myLocationButton.visibility = if (!isSectionVisible) View.VISIBLE else View.GONE
+        menuButton.visibility = if (!isRecording && !isSectionVisible) View.VISIBLE else View.GONE
 
         if (isRecording) {
             updateRecordingPanelTime()
@@ -380,20 +388,63 @@ class MainActivity : AppCompatActivity() {
         val tracks = trackStore.loadTracks()
         showSection(getString(R.string.statistics))
         sectionContent.addView(statSummaryCard(tracks))
-        sectionContent.addView(activityStatsCard(TrackType.WALK, tracks))
-        sectionContent.addView(activityStatsCard(TrackType.BIKE, tracks))
+
+        val tabs = TabLayout(this).apply {
+            addTab(newTab().setText(TrackType.WALK.title).setTag(TrackType.WALK))
+            addTab(newTab().setText(TrackType.BIKE.title).setTag(TrackType.BIKE))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(8)
+                bottomMargin = dp(12)
+            }
+        }
+        val tabContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        fun renderTab(type: TrackType) {
+            val activityTracks = tracks.filter { it.type == type }
+            tabContent.removeAllViews()
+            tabContent.addView(activityStatsCard(type, activityTracks))
+            tabContent.addView(activityCalendarCard(type, activityTracks))
+            tabContent.addView(monthlyDistanceCard(type, activityTracks))
+        }
+
+        tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) {
+                renderTab(tab.tag as TrackType)
+            }
+
+            override fun onTabUnselected(tab: TabLayout.Tab) = Unit
+            override fun onTabReselected(tab: TabLayout.Tab) = Unit
+        })
+
+        sectionContent.addView(tabs)
+        sectionContent.addView(tabContent)
+        renderTab(TrackType.WALK)
     }
 
     private fun showSection(title: String) {
         sectionTitle.text = title
         sectionContent.removeAllViews()
         sectionPanel.visibility = View.VISIBLE
+        addTrackFab.visibility = View.GONE
+        myLocationButton.visibility = View.GONE
+        menuButton.visibility = View.GONE
+        recordingPanel.visibility = View.GONE
         drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
     }
 
     private fun hideSection() {
         sectionPanel.visibility = View.GONE
         drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
+        syncRecordingState()
     }
 
     private fun groupTitle(title: String): TextView {
@@ -482,7 +533,7 @@ class MainActivity : AppCompatActivity() {
         card.addView(visibilitySwitch)
 
         val actions = LinearLayout(this).apply {
-            gravity = Gravity.END
+            gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -491,10 +542,13 @@ class MainActivity : AppCompatActivity() {
                 topMargin = dp(4)
             }
         }
-        actions.addView(actionButton(R.drawable.ic_edit, R.string.rename) {
+        actions.addView(actionButton(R.string.rename, R.color.icu_text_primary) {
             showRenameDialog(track)
         })
-        actions.addView(actionButton(R.drawable.ic_delete, R.string.delete) {
+        actions.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+        })
+        actions.addView(actionButton(R.string.delete, R.color.icu_danger) {
             showDeleteDialog(track)
         })
         card.addView(actions)
@@ -502,18 +556,17 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
-    private fun actionButton(iconRes: Int, labelRes: Int, action: () -> Unit): MaterialButton {
+    private fun actionButton(labelRes: Int, colorRes: Int, action: () -> Unit): MaterialButton {
         return MaterialButton(this).apply {
             backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            elevation = 0f
             text = getString(labelRes)
             textSize = 14f
             isAllCaps = false
-            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
-            setIconResource(iconRes)
-            iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_text_primary)
-            iconPadding = dp(6)
+            setTextColor(ContextCompat.getColor(this@MainActivity, colorRes))
             minWidth = 0
-            setPadding(dp(10), 0, dp(10), 0)
+            minimumHeight = dp(40)
+            setPadding(dp(12), 0, dp(12), 0)
             setOnClickListener { action() }
         }
     }
@@ -562,20 +615,110 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun activityStatsCard(type: TrackType, tracks: List<RecordedTrack>): View {
-        val activityTracks = tracks.filter { it.type == type }
+    private fun activityStatsCard(type: TrackType, activityTracks: List<RecordedTrack>): View {
         val currentMonth = YearMonth.now()
         val monthTracks = activityTracks.filter { GpxTrackStore.monthKey(it) == currentMonth }
+        val longestTrack = activityTracks.maxByOrNull { it.distanceMeters }
 
         val secondary = "${activityTracks.size} треков · ${getString(R.string.this_month)}: " +
-            formatDistance(monthTracks.sumOf { it.distanceMeters.toDouble() }.toFloat())
+            formatDistance(monthTracks.sumOf { it.distanceMeters.toDouble() }.toFloat()) +
+            " · лучший: ${formatDistance(longestTrack?.distanceMeters ?: 0f)}"
 
         return statsCard(
-            title = type.title,
+            title = "Итого: ${type.title.lowercase(Locale.forLanguageTag("ru-RU"))}",
             primary = formatDistance(activityTracks.sumOf { it.distanceMeters.toDouble() }.toFloat()),
             secondary = secondary,
             accentColor = type.color
         )
+    }
+
+    private fun activityCalendarCard(type: TrackType, tracks: List<RecordedTrack>): View {
+        val activeDates = tracks
+            .map { Instant.ofEpochMilli(it.startedAtMillis).atZone(ZoneId.systemDefault()).toLocalDate() }
+            .toSet()
+        val dates = (27 downTo 0).map { LocalDate.now().minusDays(it.toLong()) }
+
+        val card = contentCard()
+        card.addView(cardTitle("Календарь активности", type.color))
+        dates.chunked(7).forEach { week ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dp(8)
+                }
+            }
+            week.forEach { date ->
+                row.addView(TextView(this).apply {
+                    text = if (date in activeDates) "●" else "·"
+                    gravity = Gravity.CENTER
+                    textSize = if (date in activeDates) 24f else 28f
+                    setTextColor(
+                        if (date in activeDates) {
+                            type.color
+                        } else {
+                            ContextCompat.getColor(this@MainActivity, R.color.icu_sheet_divider)
+                        }
+                    )
+                    layoutParams = LinearLayout.LayoutParams(0, dp(26), 1f)
+                })
+            }
+            card.addView(row)
+        }
+        return card
+    }
+
+    private fun monthlyDistanceCard(type: TrackType, tracks: List<RecordedTrack>): View {
+        val months = (5 downTo 0).map { YearMonth.now().minusMonths(it.toLong()) }
+        val distances = months.associateWith { month ->
+            tracks
+                .filter { GpxTrackStore.monthKey(it) == month }
+                .sumOf { it.distanceMeters.toDouble() }
+                .toFloat()
+        }
+        val maxDistance = distances.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f
+
+        val card = contentCard()
+        card.addView(cardTitle("Километраж по месяцам", type.color))
+        months.forEach { month ->
+            val distance = distances.getValue(month)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dp(12)
+                }
+            }
+            row.addView(TextView(this).apply {
+                text = month.format(DateTimeFormatter.ofPattern("LLL", Locale.forLanguageTag("ru-RU")))
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 13f
+                layoutParams = LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.WRAP_CONTENT)
+            })
+            row.addView(View(this).apply {
+                setBackgroundColor(type.color)
+                alpha = if (distance > 0f) 1f else 0.18f
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    dp(10),
+                    (distance / maxDistance).coerceAtLeast(0.04f)
+                )
+            })
+            row.addView(TextView(this).apply {
+                text = formatDistance(distance)
+                gravity = Gravity.END
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 13f
+                layoutParams = LinearLayout.LayoutParams(dp(84), ViewGroup.LayoutParams.WRAP_CONTENT)
+            })
+            card.addView(row)
+        }
+        return card
     }
 
     private fun statsCard(
@@ -584,23 +727,8 @@ class MainActivity : AppCompatActivity() {
         secondary: String,
         accentColor: Int = ContextCompat.getColor(this, R.color.icu_purple_ink)
     ): View {
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundResource(R.drawable.bg_content_card)
-            setPadding(dp(18), dp(16), dp(18), dp(16))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(12)
-            }
-        }
-        card.addView(TextView(this).apply {
-            text = title
-            setTextColor(accentColor)
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-        })
+        val card = contentCard()
+        card.addView(cardTitle(title, accentColor))
         card.addView(TextView(this).apply {
             text = primary
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
@@ -613,6 +741,29 @@ class MainActivity : AppCompatActivity() {
             textSize = 15f
         })
         return card
+    }
+
+    private fun contentCard(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_content_card)
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(12)
+            }
+        }
+    }
+
+    private fun cardTitle(title: String, color: Int): TextView {
+        return TextView(this).apply {
+            text = title
+            setTextColor(color)
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+        }
     }
 
     private fun emptyStateText(textValue: String): TextView {

@@ -215,6 +215,7 @@ class TrackRecordingService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentTitle(getString(R.string.recording_notification_title))
             .setContentText(formatNotificationText())
+            .setContentIntent(openAppPendingIntent())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setUsesChronometer(true)
@@ -225,6 +226,18 @@ class TrackRecordingService : Service() {
                 stopPendingIntent()
             )
             .build()
+
+    private fun openAppPendingIntent(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return PendingIntent.getActivity(
+            this,
+            1,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
 
     private fun stopPendingIntent(): PendingIntent {
         val intent = Intent(this, TrackRecordingService::class.java).apply {

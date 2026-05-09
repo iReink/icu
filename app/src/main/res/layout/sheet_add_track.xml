@@ -23,48 +23,46 @@
         android:layout_marginBottom="28dp"
         android:text="@string/add_track"
         android:textColor="@color/black"
-        android:textSize="34sp" />
+        android:textSize="28sp" />
 
     <com.google.android.material.button.MaterialButton
         android:id="@+id/walkTrackButton"
         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
         android:layout_width="match_parent"
-        android:layout_height="76dp"
+        android:layout_height="60dp"
         android:text="@string/walk"
         android:textAllCaps="false"
         android:textColor="@color/icu_text_primary"
-        android:textSize="20sp"
-        android:textStyle="bold"
+        android:textSize="16sp"
         app:backgroundTint="@color/icu_purple_surface"
         app:cornerRadius="10dp"
         app:icon="@drawable/ic_walk"
         app:iconGravity="textStart"
-        app:iconPadding="16dp"
-        app:iconSize="34dp"
+        app:iconPadding="12dp"
+        app:iconSize="26dp"
         app:iconTint="@color/icu_text_primary"
         app:strokeColor="@color/black"
-        app:strokeWidth="3dp" />
+        app:strokeWidth="2dp" />
 
     <com.google.android.material.button.MaterialButton
         android:id="@+id/bikeTrackButton"
         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
         android:layout_width="match_parent"
-        android:layout_height="76dp"
-        android:layout_marginTop="24dp"
+        android:layout_height="60dp"
+        android:layout_marginTop="16dp"
         android:text="@string/bike"
         android:textAllCaps="false"
         android:textColor="@color/icu_text_primary"
-        android:textSize="20sp"
-        android:textStyle="bold"
+        android:textSize="16sp"
         app:backgroundTint="@color/icu_purple_surface"
         app:cornerRadius="10dp"
         app:icon="@drawable/ic_bike"
         app:iconGravity="textStart"
-        app:iconPadding="16dp"
-        app:iconSize="34dp"
+        app:iconPadding="12dp"
+        app:iconSize="26dp"
         app:iconTint="@color/icu_text_primary"
         app:strokeColor="@color/icu_blue_track"
-        app:strokeWidth="3dp" />
+        app:strokeWidth="2dp" />
 
     <View
         android:layout_width="match_parent"
@@ -77,17 +75,16 @@
         android:id="@+id/uploadTrackButton"
         style="@style/Widget.MaterialComponents.Button"
         android:layout_width="match_parent"
-        android:layout_height="76dp"
+        android:layout_height="60dp"
         android:text="@string/upload"
         android:textAllCaps="false"
         android:textColor="@color/icu_text_primary"
-        android:textSize="20sp"
-        android:textStyle="bold"
+        android:textSize="16sp"
         app:backgroundTint="@color/icu_upload_disabled"
         app:cornerRadius="10dp"
         app:icon="@drawable/ic_upload"
         app:iconGravity="textStart"
-        app:iconPadding="16dp"
-        app:iconSize="34dp"
+        app:iconPadding="12dp"
+        app:iconSize="26dp"
         app:iconTint="@color/icu_text_primary" />
 </LinearLayout>
