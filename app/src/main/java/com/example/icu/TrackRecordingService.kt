@@ -303,7 +303,7 @@ class TrackRecordingService : Service() {
         const val WALK_INTERVAL_MS = 3_000L
         const val BIKE_INTERVAL_MS = 2_000L
         const val MAX_ACCEPTED_ACCURACY_METERS = 50f
-        const val MIN_DISTANCE_FOR_DISTANCE_METERS = 3f
+        const val MIN_DISTANCE_FOR_DISTANCE_METERS = 0.5f
         const val LIVE_LOCATION_INTERVAL_MS = 10_000L
 
         private const val CHANNEL_ID = "track_recording"

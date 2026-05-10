@@ -131,7 +131,6 @@ class GpxTrackStore(private val context: Context) {
             var name: String? = null
             var type = TrackType.WALK
             var visible = true
-            var storedDistanceMeters: Float? = null
             val points = mutableListOf<TrackPoint>()
 
             while (parser.next() != XmlPullParser.END_DOCUMENT) {
@@ -141,7 +140,7 @@ class GpxTrackStore(private val context: Context) {
                     "name" -> name = parser.readText()
                     "type" -> type = TrackType.fromGpxType(parser.readText())
                     "visible" -> visible = parser.readText().toBooleanStrictOrNull() ?: true
-                    "distanceMeters" -> storedDistanceMeters = parser.readText().toFloatOrNull()
+                    "distanceMeters" -> parser.readText()
                     "trkpt" -> parseTrackPoint(parser)?.let { points.add(it) }
                 }
             }
@@ -153,7 +152,7 @@ class GpxTrackStore(private val context: Context) {
                 name = name?.takeIf { it.isNotBlank() } ?: defaultTrackName(type, startedAtMillis),
                 type = type,
                 points = points,
-                distanceMeters = storedDistanceMeters ?: calculateDistance(points),
+                distanceMeters = calculateDistance(points),
                 durationMillis = calculateDuration(points),
                 startedAtMillis = startedAtMillis,
                 visible = visible,
