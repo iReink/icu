@@ -158,6 +158,7 @@ class MainActivity : AppCompatActivity() {
         appLocationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         liveLocationUploader = LiveLocationUploader(this)
         setContentView(R.layout.activity_main)
+        showStartupSplash()
 
         bindViews()
         setupImeInsets()
@@ -232,6 +233,82 @@ class MainActivity : AppCompatActivity() {
         sectionPanel = findViewById(R.id.sectionPanel)
         sectionTitle = findViewById(R.id.sectionTitle)
         sectionContent = findViewById(R.id.sectionContent)
+    }
+
+    private fun showStartupSplash() {
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.icu_launcher_background))
+            isClickable = true
+            isFocusable = true
+        }
+
+        val background = ImageView(this).apply {
+            setImageResource(R.drawable.icu_splash_background)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = 0.96f
+            scaleX = 1.03f
+            scaleY = 1.03f
+        }
+        overlay.addView(background, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            alpha = 0f
+            translationY = dp(12).toFloat()
+        }
+        content.addView(TextView(this).apply {
+            text = getString(R.string.app_name)
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(20, 94, 48))
+            textSize = 52f
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.08f
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            bottomMargin = dp(28)
+        })
+        content.addView(ImageView(this).apply {
+            setImageResource(R.drawable.icu_app_icon)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            elevation = dp(10).toFloat()
+        }, LinearLayout.LayoutParams(dp(148), dp(148)))
+
+        overlay.addView(content, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+
+        addContentView(overlay, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+
+        background.animate()
+            .scaleX(1.07f)
+            .scaleY(1.07f)
+            .setDuration(SPLASH_DURATION_MS)
+            .start()
+        content.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .setStartDelay(120L)
+            .setDuration(420L)
+            .start()
+        overlay.postDelayed({
+            overlay.animate()
+                .alpha(0f)
+                .setDuration(360L)
+                .withEndAction {
+                    (overlay.parent as? ViewGroup)?.removeView(overlay)
+                }
+                .start()
+        }, SPLASH_VISIBLE_MS)
     }
 
     private fun setupImeInsets() {
@@ -1988,5 +2065,7 @@ class MainActivity : AppCompatActivity() {
         private const val TRACK_STROKE_WIDTH = 8f
         private const val TIMER_INTERVAL_MS = 1_000L
         private const val FRIEND_HIGHLIGHT_DURATION_MS = 3_500L
+        private const val SPLASH_VISIBLE_MS = 1_100L
+        private const val SPLASH_DURATION_MS = 1_500L
     }
 }
