@@ -12,6 +12,7 @@
     <string name="my_tracks">Мои треки</string>
     <string name="statistics">Статистика</string>
     <string name="settings">Настройки</string>
+    <string name="app_version">Версия %1$s</string>
     <string name="high_accuracy">Высокая точность</string>
     <string name="high_accuracy_tooltip">Включает запись точек маршрута 1 раз в секунду. Это увеличит расход батареи, а запись будет весить больше</string>
     <string name="all">Всё</string>

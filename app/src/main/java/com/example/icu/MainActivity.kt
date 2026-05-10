@@ -399,6 +399,10 @@ class MainActivity : AppCompatActivity() {
                     showProfileScreen()
                     true
                 }
+                R.id.navSettings -> {
+                    showSettingsScreen()
+                    true
+                }
                 else -> false
             }
         }
@@ -1174,7 +1178,33 @@ class MainActivity : AppCompatActivity() {
         currentSection = Section.SETTINGS
         showSection(getString(R.string.settings))
         setSectionContentPadding(horizontalDp = 20)
-        sectionContent.addView(settingsRow())
+        sectionContent.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            minimumHeight = (resources.displayMetrics.heightPixels - dp(260)).coerceAtLeast(dp(360))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            addView(settingsRow())
+            addView(View(this@MainActivity), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            ))
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.app_version, BuildConfig.VERSION_NAME)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 12f
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dp(24)
+                    bottomMargin = dp(8)
+                }
+            })
+        })
     }
 
     private fun showProfileScreen() {
