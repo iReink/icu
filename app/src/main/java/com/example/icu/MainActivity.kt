@@ -26,7 +26,12 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.text.SpannableStringBuilder
+import android.text.Spanned
 import android.text.method.PasswordTransformationMethod
+import android.text.style.BulletSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -38,6 +43,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -1196,6 +1202,9 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
                 textSize = 12f
                 gravity = Gravity.CENTER
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { showChangelogSheet() }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1205,6 +1214,128 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         })
+    }
+
+    private fun showChangelogSheet() {
+        val sheet = BottomSheetDialog(this)
+        val changelog = runCatching {
+            assets.open(CHANGELOG_ASSET_NAME).bufferedReader(Charsets.UTF_8).use { reader ->
+                reader.readText()
+            }
+        }.getOrElse {
+            getString(R.string.unknown_error)
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_bottom_sheet)
+            setPadding(dp(20), dp(14), dp(20), dp(24))
+            addView(View(this@MainActivity).apply {
+                setBackgroundResource(R.drawable.bg_sheet_handle)
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(6)).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    bottomMargin = dp(28)
+                }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.changelog_title)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 28f
+                typeface = Typeface.DEFAULT
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(18) }
+            })
+            addView(ScrollView(this@MainActivity).apply {
+                isFillViewport = false
+                addView(TextView(this@MainActivity).apply {
+                    text = formatChangelogMarkdown(changelog)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                    textSize = 15f
+                    setLineSpacing(dp(2).toFloat(), 1.0f)
+                })
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    (resources.displayMetrics.heightPixels * 0.64f).toInt()
+                )
+            })
+        }
+
+        sheet.setContentView(content)
+        sheet.setOnShowListener { dialog ->
+            val bottomSheet = (dialog as BottomSheetDialog)
+                .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+            bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
+        }
+        sheet.show()
+    }
+
+    private fun formatChangelogMarkdown(markdown: String): CharSequence {
+        val result = SpannableStringBuilder()
+        markdown.lines().forEach { rawLine ->
+            val line = rawLine.trimEnd()
+            when {
+                line.isBlank() -> {
+                    if (result.isNotEmpty() && !result.endsWith("\n\n")) {
+                        result.append("\n")
+                    }
+                }
+                line.startsWith("# ") -> appendMarkdownLine(
+                    result,
+                    text = line.removePrefix("# ").trim(),
+                    relativeSize = 1.45f,
+                    isBold = true,
+                    bottomBreaks = 2
+                )
+                line.startsWith("## ") -> appendMarkdownLine(
+                    result,
+                    text = line.removePrefix("## ").trim(),
+                    relativeSize = 1.28f,
+                    isBold = true,
+                    bottomBreaks = 2
+                )
+                line.startsWith("### ") -> appendMarkdownLine(
+                    result,
+                    text = line.removePrefix("### ").trim(),
+                    relativeSize = 1.12f,
+                    isBold = true,
+                    bottomBreaks = 1
+                )
+                line.startsWith("- ") -> appendMarkdownLine(
+                    result,
+                    text = line.removePrefix("- ").trim(),
+                    bullet = true,
+                    bottomBreaks = 1
+                )
+                else -> appendMarkdownLine(result, text = line, bottomBreaks = 2)
+            }
+        }
+        return result
+    }
+
+    private fun appendMarkdownLine(
+        builder: SpannableStringBuilder,
+        text: String,
+        relativeSize: Float? = null,
+        isBold: Boolean = false,
+        bullet: Boolean = false,
+        bottomBreaks: Int
+    ) {
+        val start = builder.length
+        builder.append(text)
+        val end = builder.length
+        if (isBold) {
+            builder.setSpan(StyleSpan(Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        if (relativeSize != null) {
+            builder.setSpan(RelativeSizeSpan(relativeSize), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        if (bullet) {
+            builder.setSpan(BulletSpan(dp(14)), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        repeat(bottomBreaks) {
+            builder.append("\n")
+        }
     }
 
     private fun showProfileScreen() {
@@ -2642,5 +2773,6 @@ class MainActivity : AppCompatActivity() {
         private const val SPLASH_DURATION_MS = 1_500L
         private const val FRIEND_LOCATION_REFRESH_MS = 30_000L
         private const val TRACK_SAVED_SNACKBAR_MS = 10_000
+        private const val CHANGELOG_ASSET_NAME = "CHANGELOG.md"
     }
 }

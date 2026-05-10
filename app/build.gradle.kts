@@ -3,6 +3,12 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+val generatedChangelogAssets = layout.buildDirectory.dir("generated/assets/changelog")
+val copyChangelogToAssets by tasks.registering(Copy::class) {
+    from(rootProject.file("CHANGELOG.md"))
+    into(generatedChangelogAssets)
+}
+
 android {
     namespace = "com.example.icu"
     compileSdk {
@@ -13,8 +19,8 @@ android {
         applicationId = "com.example.icu"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.6.0"
+        versionCode = 7
+        versionName = "0.6.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -31,6 +37,11 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    sourceSets {
+        getByName("main") {
+            assets.srcDir(generatedChangelogAssets)
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -38,6 +49,10 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+}
+
+tasks.named("preBuild") {
+    dependsOn(copyChangelogToAssets)
 }
 
 dependencies {
