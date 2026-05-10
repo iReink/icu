@@ -122,6 +122,7 @@ class MainActivity : AppCompatActivity() {
     private var lastKnownUserLocation: Location? = null
     private var friendLocationRefreshInFlight = false
     private var friendTooltip: PopupWindow? = null
+    private var infoTooltip: PopupWindow? = null
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
 
     private val foregroundLocationListener = LocationListener { location ->
@@ -241,6 +242,7 @@ class MainActivity : AppCompatActivity() {
         elapsedHandler.removeCallbacks(elapsedTicker)
         elapsedHandler.removeCallbacks(friendLocationRefreshTicker)
         friendTooltip?.dismiss()
+        infoTooltip?.dismiss()
     }
 
     override fun onDestroy() {
@@ -1225,17 +1227,28 @@ class MainActivity : AppCompatActivity() {
         }.getOrElse {
             getString(R.string.unknown_error)
         }
+        lateinit var handle: View
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundResource(R.drawable.bg_bottom_sheet)
             setPadding(dp(20), dp(14), dp(20), dp(24))
-            addView(View(this@MainActivity).apply {
+            handle = View(this@MainActivity).apply {
                 setBackgroundResource(R.drawable.bg_sheet_handle)
+                setOnTouchListener { _, event ->
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> sheet.behavior.isDraggable = true
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            post { sheet.behavior.isDraggable = false }
+                        }
+                    }
+                    false
+                }
                 layoutParams = LinearLayout.LayoutParams(dp(44), dp(6)).apply {
                     gravity = Gravity.CENTER_HORIZONTAL
                     bottomMargin = dp(28)
                 }
-            })
+            }
+            addView(handle)
             addView(TextView(this@MainActivity).apply {
                 text = getString(R.string.changelog_title)
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
@@ -1266,6 +1279,7 @@ class MainActivity : AppCompatActivity() {
             val bottomSheet = (dialog as BottomSheetDialog)
                 .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
             bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
+            sheet.behavior.isDraggable = false
         }
         sheet.show()
     }
@@ -1864,7 +1878,11 @@ class MainActivity : AppCompatActivity() {
             contentDescription = getString(R.string.high_accuracy_tooltip)
             TooltipCompat.setTooltipText(this, getString(R.string.high_accuracy_tooltip))
             setOnClickListener {
-                showSnackbar(getString(R.string.high_accuracy_tooltip), isLong = true)
+                showInfoTooltip(
+                    anchor = this,
+                    title = getString(R.string.high_accuracy),
+                    body = getString(R.string.high_accuracy_tooltip)
+                )
             }
             layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
         })
@@ -1875,6 +1893,58 @@ class MainActivity : AppCompatActivity() {
             }
         })
         return row
+    }
+
+    private fun showInfoTooltip(anchor: View, title: String, body: String) {
+        infoTooltip?.dismiss()
+
+        val titleView = TextView(this).apply {
+            text = title
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val bodyView = TextView(this).apply {
+            text = body
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 14f
+            setLineSpacing(dp(2).toFloat(), 1.0f)
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(243, 237, 247))
+                cornerRadius = dp(16).toFloat()
+            }
+            elevation = dp(6).toFloat()
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            addView(titleView)
+            addView(bodyView, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) })
+        }
+
+        val root = findViewById<View>(R.id.mainContent)
+        val width = (resources.displayMetrics.widthPixels - dp(40)).coerceAtMost(dp(320))
+        val popup = PopupWindow(content, width, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(8).toFloat()
+        }
+        content.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val anchorOnScreen = IntArray(2)
+        anchor.getLocationOnScreen(anchorOnScreen)
+        val minX = dp(12)
+        val maxX = resources.displayMetrics.widthPixels - width - dp(12)
+        val x = (anchorOnScreen[0] + anchor.width - width).coerceIn(minX, maxX.coerceAtLeast(minX))
+        val preferredY = anchorOnScreen[1] - content.measuredHeight - dp(10)
+        val y = if (preferredY >= dp(12)) preferredY else anchorOnScreen[1] + anchor.height + dp(10)
+        popup.showAtLocation(root, Gravity.NO_GRAVITY, x, y)
+        infoTooltip = popup
     }
 
     private fun statsPageView(page: StatsPage, allTracks: List<RecordedTrack>): View {
