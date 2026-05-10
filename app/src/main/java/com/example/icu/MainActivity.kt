@@ -31,6 +31,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -1281,42 +1282,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showEditMyProfileDialog(profile: UserProfile) {
-        val firstNameInput = EditText(this).apply {
-            hint = getString(R.string.first_name)
-            setText(profile.firstName)
-            setSingleLine(true)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
-        }
-        val lastNameInput = EditText(this).apply {
-            hint = getString(R.string.last_name)
-            setText(profile.lastName)
-            setSingleLine(true)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
-        }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(8), dp(4), 0)
-            addView(firstNameInput, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ))
-            addView(lastNameInput, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ))
-        }
-
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.edit_name)
-            .setView(content)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.save) { _, _ ->
-                updateMyProfile(
-                    firstNameInput.text?.toString().orEmpty(),
-                    lastNameInput.text?.toString().orEmpty()
-                )
-            }
-            .show()
+        showEditNameSheet(
+            firstName = profile.firstName,
+            lastName = profile.lastName,
+            onSave = ::updateMyProfile
+        )
     }
 
     private fun updateMyProfile(firstName: String, lastName: String) {
@@ -1334,52 +1304,116 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showEditFriendNameDialog(friend: FriendProfile) {
-        val firstNameInput = EditText(this).apply {
-            hint = getString(R.string.first_name)
-            setText(friend.displayFirstName)
-            setSingleLine(true)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        showEditNameSheet(
+            firstName = friend.displayFirstName,
+            lastName = friend.displayLastName
+        ) { firstName, lastName ->
+            setFriendAlias(friend, firstName, lastName)
         }
-        val lastNameInput = EditText(this).apply {
-            hint = getString(R.string.last_name)
-            setText(friend.displayLastName)
-            setSingleLine(true)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
-        }
-        val ownerName = listOf(friend.firstName, friend.lastName)
-            .filter { it.isNotBlank() }
-            .joinToString(" ")
-            .ifBlank { friend.email }
+    }
+
+    private fun showEditNameSheet(
+        firstName: String,
+        lastName: String,
+        onSave: (String, String) -> Unit
+    ) {
+        val sheet = BottomSheetDialog(this)
+        val firstNameInput = nameSheetInput(firstName)
+        val lastNameInput = nameSheetInput(lastName)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(8), dp(4), 0)
-            addView(TextView(this@MainActivity).apply {
-                text = getString(R.string.owner_name, ownerName)
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
-                textSize = 13f
+            setBackgroundResource(R.drawable.bg_bottom_sheet)
+            setPadding(dp(12), dp(14), dp(12), dp(32))
+            addView(View(this@MainActivity).apply {
+                setBackgroundResource(R.drawable.bg_sheet_handle)
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(6)).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    bottomMargin = dp(72)
+                }
             })
-            addView(firstNameInput, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(8) })
-            addView(lastNameInput, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ))
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.edit_name_sheet_title)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 28f
+                typeface = Typeface.DEFAULT
+                includeFontPadding = true
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            })
+            addView(nameSheetInputLayout(getString(R.string.first_name), firstNameInput).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(26) }
+            })
+            addView(nameSheetInputLayout(getString(R.string.last_name), lastNameInput).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(10) }
+            })
+            addView(MaterialButton(this@MainActivity).apply {
+                text = getString(R.string.save)
+                isAllCaps = false
+                textSize = 16f
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_surface)
+                cornerRadius = dp(8)
+                setOnClickListener {
+                    sheet.dismiss()
+                    onSave(
+                        firstNameInput.text?.toString().orEmpty(),
+                        lastNameInput.text?.toString().orEmpty()
+                    )
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(56)
+                ).apply { topMargin = dp(18) }
+            })
         }
 
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.edit_friend_name)
-            .setView(content)
-            .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.save) { _, _ ->
-                setFriendAlias(
-                    friend,
-                    firstNameInput.text?.toString().orEmpty(),
-                    lastNameInput.text?.toString().orEmpty()
-                )
+        sheet.setContentView(content)
+        sheet.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        sheet.setOnShowListener { dialog ->
+            val bottomSheet = (dialog as BottomSheetDialog)
+                .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+            bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
+            firstNameInput.post {
+                firstNameInput.requestFocus()
+                firstNameInput.selectAll()
+                val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                inputMethodManager.showSoftInput(firstNameInput, InputMethodManager.SHOW_IMPLICIT)
             }
-            .show()
+        }
+        sheet.show()
+    }
+
+    private fun nameSheetInput(value: String): TextInputEditText {
+        return TextInputEditText(this).apply {
+            setText(value)
+            setSingleLine(true)
+            setSelectAllOnFocus(true)
+            textSize = 20f
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+            setPadding(dp(16), 0, dp(16), 0)
+        }
+    }
+
+    private fun nameSheetInputLayout(label: String, input: TextInputEditText): TextInputLayout {
+        return TextInputLayout(this).apply {
+            hint = label
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            boxBackgroundColor = ContextCompat.getColor(this@MainActivity, R.color.icu_sheet_surface)
+            setBoxCornerRadii(dp(4).toFloat(), dp(4).toFloat(), dp(4).toFloat(), dp(4).toFloat())
+            endIconMode = TextInputLayout.END_ICON_CLEAR_TEXT
+            addView(input, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(64)
+            ))
+        }
     }
 
     private fun acceptPendingInviteIfNeeded() {

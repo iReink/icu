@@ -86,6 +86,7 @@
     <string name="share_location">Делиться позицией</string>
     <string name="hide_myself">Не показывать себя</string>
     <string name="edit_name">Изменить имя</string>
+    <string name="edit_name_sheet_title">Изменение имени</string>
     <string name="edit_friend_name">Изменить имя друга</string>
     <string name="reset_friend_name">Вернуть исходное имя</string>
     <string name="first_name">Имя</string>
