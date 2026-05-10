@@ -1376,8 +1376,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         sheet.setContentView(content)
-        sheet.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         sheet.setOnShowListener { dialog ->
+            sheet.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
             val bottomSheet = (dialog as BottomSheetDialog)
                 .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
             bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
@@ -1408,11 +1408,11 @@ class MainActivity : AppCompatActivity() {
             boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
             boxBackgroundColor = ContextCompat.getColor(this@MainActivity, R.color.icu_sheet_surface)
             setBoxCornerRadii(dp(4).toFloat(), dp(4).toFloat(), dp(4).toFloat(), dp(4).toFloat())
-            endIconMode = TextInputLayout.END_ICON_CLEAR_TEXT
             addView(input, ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(64)
             ))
+            endIconMode = TextInputLayout.END_ICON_CLEAR_TEXT
         }
     }
 
