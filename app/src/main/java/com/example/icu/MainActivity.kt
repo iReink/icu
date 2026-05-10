@@ -6,8 +6,15 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Point
+import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.location.Location
@@ -29,6 +36,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupWindow
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -103,9 +111,13 @@ class MainActivity : AppCompatActivity() {
     private var lastAuthEmail: String = ""
     private var authRootView: LinearLayout? = null
     private var lastForegroundLiveUploadMillis = 0L
+    private var lastKnownUserLocation: Location? = null
+    private var friendLocationRefreshInFlight = false
+    private var friendTooltip: PopupWindow? = null
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
 
     private val foregroundLocationListener = LocationListener { location ->
+        lastKnownUserLocation = location
         uploadForegroundLiveLocation(location)
     }
 
@@ -114,6 +126,13 @@ class MainActivity : AppCompatActivity() {
         override fun run() {
             updateRecordingPanelTime()
             elapsedHandler.postDelayed(this, TIMER_INTERVAL_MS)
+        }
+    }
+
+    private val friendLocationRefreshTicker = object : Runnable {
+        override fun run() {
+            refreshFriendLocationsOnMap()
+            elapsedHandler.postDelayed(this, FRIEND_LOCATION_REFRESH_MS)
         }
     }
 
@@ -199,6 +218,9 @@ class MainActivity : AppCompatActivity() {
         syncRecordingState()
         syncTracksSilently()
         requestForegroundLiveLocationUpdates()
+        refreshFriendLocationsOnMap()
+        elapsedHandler.removeCallbacks(friendLocationRefreshTicker)
+        elapsedHandler.postDelayed(friendLocationRefreshTicker, FRIEND_LOCATION_REFRESH_MS)
     }
 
     override fun onPause() {
@@ -208,6 +230,8 @@ class MainActivity : AppCompatActivity() {
         map.onPause()
         super.onPause()
         elapsedHandler.removeCallbacks(elapsedTicker)
+        elapsedHandler.removeCallbacks(friendLocationRefreshTicker)
+        friendTooltip?.dismiss()
     }
 
     override fun onDestroy() {
@@ -589,6 +613,7 @@ class MainActivity : AppCompatActivity() {
                     hideSection()
                     bottomNavigation.selectedItemId = R.id.navMap
                     requestForegroundLiveLocationUpdates()
+                    refreshFriendLocationsOnMap()
                     syncTracks(showToast = true)
                 }
             }.onFailure { error ->
@@ -616,6 +641,7 @@ class MainActivity : AppCompatActivity() {
                         hideSection()
                         bottomNavigation.selectedItemId = R.id.navMap
                         requestForegroundLiveLocationUpdates()
+                        refreshFriendLocationsOnMap()
                         syncTracks(showToast = true)
                     }
                 }
@@ -1124,30 +1150,33 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        sectionContent.addView(profileStatusCard(session.email ?: session.userId))
+        sectionContent.addView(profileStatusCard(session.email ?: session.userId, onEdit = null))
         sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
         })
         sectionContent.addView(groupTitle(getString(R.string.friends)))
         sectionContent.addView(emptyStateText(getString(R.string.loading)))
-        loadFriends()
+        loadProfileAndFriends()
         sectionContent.addView(destructiveGhostButton(getString(R.string.sign_out)) {
             sessionStore.clear()
+            clearFriendLocationOverlays()
             stopForegroundLiveLocationUpdates()
             showProfileScreen()
         })
     }
 
-    private fun loadFriends() {
+    private fun loadProfileAndFriends() {
         val session = sessionStore.current() ?: return
         backgroundExecutor.execute {
             runCatching {
-                supabaseClient.fetchFriends(supabaseClient.activeSession())
-            }.onSuccess { friends ->
+                val activeSession = supabaseClient.activeSession()
+                supabaseClient.fetchMyProfile(activeSession) to supabaseClient.fetchFriends(activeSession)
+            }.onSuccess { (profile, friends) ->
                 runOnUiThread {
                     if (currentSection == Section.PROFILE) {
-                        renderProfileWithFriends(session, friends)
+                        renderProfileWithFriends(profile, friends)
                     }
+                    refreshFriendLocationsForFriends(friends)
                 }
             }.onFailure { error ->
                 runOnUiThread {
@@ -1159,10 +1188,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun renderProfileWithFriends(session: SupabaseSession, friends: List<FriendProfile>) {
+    private fun renderProfileWithFriends(profile: UserProfile, friends: List<FriendProfile>) {
         sectionContent.removeAllViews()
         setSectionContentPadding(horizontalDp = 20)
-        sectionContent.addView(profileStatusCard(session.email ?: session.userId))
+        sectionContent.addView(profileStatusCard(profile.displayName, profile.email, onEdit = {
+            showEditMyProfileDialog(profile)
+        }))
         sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
         })
@@ -1182,6 +1213,7 @@ class MainActivity : AppCompatActivity() {
         }
         sectionContent.addView(destructiveGhostButton(getString(R.string.sign_out)) {
             sessionStore.clear()
+            clearFriendLocationOverlays()
             stopForegroundLiveLocationUpdates()
             showProfileScreen()
         })
@@ -1207,6 +1239,108 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun showEditMyProfileDialog(profile: UserProfile) {
+        val firstNameInput = EditText(this).apply {
+            hint = getString(R.string.first_name)
+            setText(profile.firstName)
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        }
+        val lastNameInput = EditText(this).apply {
+            hint = getString(R.string.last_name)
+            setText(profile.lastName)
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(8), dp(4), 0)
+            addView(firstNameInput, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            addView(lastNameInput, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.edit_name)
+            .setView(content)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.save) { _, _ ->
+                updateMyProfile(
+                    firstNameInput.text?.toString().orEmpty(),
+                    lastNameInput.text?.toString().orEmpty()
+                )
+            }
+            .show()
+    }
+
+    private fun updateMyProfile(firstName: String, lastName: String) {
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.updateMyProfile(supabaseClient.activeSession(), firstName, lastName)
+            }.onSuccess {
+                runOnUiThread { showProfileScreen() }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun showEditFriendNameDialog(friend: FriendProfile) {
+        val firstNameInput = EditText(this).apply {
+            hint = getString(R.string.first_name)
+            setText(friend.displayFirstName)
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        }
+        val lastNameInput = EditText(this).apply {
+            hint = getString(R.string.last_name)
+            setText(friend.displayLastName)
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        }
+        val ownerName = listOf(friend.firstName, friend.lastName)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .ifBlank { friend.email }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(8), dp(4), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.owner_name, ownerName)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 13f
+            })
+            addView(firstNameInput, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) })
+            addView(lastNameInput, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.edit_friend_name)
+            .setView(content)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.save) { _, _ ->
+                setFriendAlias(
+                    friend,
+                    firstNameInput.text?.toString().orEmpty(),
+                    lastNameInput.text?.toString().orEmpty()
+                )
+            }
+            .show()
     }
 
     private fun acceptPendingInviteIfNeeded() {
@@ -1242,7 +1376,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     hideSection()
                     bottomNavigation.selectedItemId = R.id.navMap
-                    drawFriendLocations(friend, points)
+                    drawFriendLocation(friend, points, centerOnLastPoint = true, clearExisting = false)
                 }
             }.onFailure { error ->
                 runOnUiThread {
@@ -1688,14 +1822,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun profileStatusCard(textValue: String): View {
+    private fun profileStatusCard(
+        textValue: String,
+        subtitle: String? = null,
+        onEdit: (() -> Unit)? = null
+    ): View {
         return contentCard().apply {
             addView(cardTitle(getString(R.string.profile), ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink)))
             addView(TextView(this@MainActivity).apply {
                 text = textValue
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
                 textSize = 16f
+                typeface = Typeface.DEFAULT_BOLD
             })
+            subtitle?.takeIf { it.isNotBlank() }?.let { value ->
+                addView(TextView(this@MainActivity).apply {
+                    text = value
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                    textSize = 14f
+                })
+            }
+            onEdit?.let { action ->
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = getString(R.string.edit_name)
+                    isAllCaps = false
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                    elevation = 0f
+                    stateListAnimator = null
+                    setOnClickListener { action() }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        dp(44)
+                    ).apply {
+                        topMargin = dp(8)
+                    }
+                })
+            }
         }
     }
 
@@ -1759,11 +1922,18 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             addView(TextView(this@MainActivity).apply {
-                text = friend.email.ifBlank { friend.userId }
+                text = friend.displayName
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
                 textSize = 16f
                 typeface = Typeface.DEFAULT_BOLD
             })
+            if (friend.displayName != friend.email && friend.email.isNotBlank()) {
+                addView(TextView(this@MainActivity).apply {
+                    text = friend.email
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                    textSize = 13f
+                })
+            }
             addView(TextView(this@MainActivity).apply {
                 text = if (friend.iShare) getString(R.string.sharing_location_enabled) else getString(R.string.sharing_location_disabled)
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
@@ -1790,10 +1960,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun showFriendMenu(anchor: View, friend: FriendProfile) {
         PopupMenu(this, anchor).apply {
-            menu.add(0, FRIEND_ACTION_SHARE, 0, if (friend.iShare) R.string.hide_myself else R.string.share_location)
-            menu.add(0, FRIEND_ACTION_DELETE, 1, R.string.delete_friend)
+            menu.add(0, FRIEND_ACTION_RENAME, 0, R.string.edit_friend_name)
+            if (friend.hasAlias) {
+                menu.add(0, FRIEND_ACTION_RESET_NAME, 1, R.string.reset_friend_name)
+            }
+            menu.add(0, FRIEND_ACTION_SHARE, 2, if (friend.iShare) R.string.hide_myself else R.string.share_location)
+            menu.add(0, FRIEND_ACTION_DELETE, 3, R.string.delete_friend)
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
+                    FRIEND_ACTION_RENAME -> showEditFriendNameDialog(friend)
+                    FRIEND_ACTION_RESET_NAME -> resetFriendAlias(friend)
                     FRIEND_ACTION_SHARE -> setFriendShare(friend, !friend.iShare)
                     FRIEND_ACTION_DELETE -> deleteFriend(friend)
                 }
@@ -1808,7 +1984,44 @@ class MainActivity : AppCompatActivity() {
             runCatching {
                 supabaseClient.setFriendShare(supabaseClient.activeSession(), friend.friendshipId, isSharing)
             }.onSuccess {
-                runOnUiThread { showProfileScreen() }
+                runOnUiThread {
+                    showProfileScreen()
+                    refreshFriendLocationsOnMap()
+                }
+            }
+        }
+    }
+
+    private fun setFriendAlias(friend: FriendProfile, firstName: String, lastName: String) {
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.setFriendAlias(supabaseClient.activeSession(), friend.userId, firstName, lastName)
+            }.onSuccess {
+                runOnUiThread {
+                    showProfileScreen()
+                    refreshFriendLocationsOnMap()
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun resetFriendAlias(friend: FriendProfile) {
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.resetFriendAlias(supabaseClient.activeSession(), friend.userId)
+            }.onSuccess {
+                runOnUiThread {
+                    showProfileScreen()
+                    refreshFriendLocationsOnMap()
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
+                }
             }
         }
     }
@@ -1818,38 +2031,285 @@ class MainActivity : AppCompatActivity() {
             runCatching {
                 supabaseClient.deleteFriend(supabaseClient.activeSession(), friend.friendshipId)
             }.onSuccess {
-                runOnUiThread { showProfileScreen() }
+                runOnUiThread {
+                    showProfileScreen()
+                    refreshFriendLocationsOnMap()
+                }
             }
         }
     }
 
-    private fun drawFriendLocations(friend: FriendProfile, points: List<LocationSharePoint>) {
+    private fun refreshFriendLocationsOnMap() {
+        if (friendLocationRefreshInFlight) return
+        val session = sessionStore.current()
+        if (session == null) {
+            clearFriendLocationOverlays()
+            return
+        }
+
+        friendLocationRefreshInFlight = true
+        backgroundExecutor.execute {
+            runCatching {
+                val activeSession = supabaseClient.activeSession()
+                val friends = supabaseClient.fetchFriends(activeSession)
+                friends.map { friend ->
+                    friend to if (friend.friendShares) {
+                        supabaseClient.fetchFriendLocations(activeSession, friend.userId)
+                    } else {
+                        emptyList()
+                    }
+                }
+            }.onSuccess { friendPoints ->
+                runOnUiThread {
+                    friendLocationRefreshInFlight = false
+                    drawFriendPoints(friendPoints)
+                }
+            }.onFailure {
+                runOnUiThread {
+                    friendLocationRefreshInFlight = false
+                }
+            }
+        }
+    }
+
+    private fun refreshFriendLocationsForFriends(friends: List<FriendProfile>) {
+        backgroundExecutor.execute {
+            runCatching {
+                val activeSession = supabaseClient.activeSession()
+                friends.map { friend ->
+                    friend to if (friend.friendShares) {
+                        supabaseClient.fetchFriendLocations(activeSession, friend.userId)
+                    } else {
+                        emptyList()
+                    }
+                }
+            }.onSuccess { friendPoints ->
+                runOnUiThread { drawFriendPoints(friendPoints) }
+            }
+        }
+    }
+
+    private fun drawFriendPoints(friendPoints: List<Pair<FriendProfile, List<LocationSharePoint>>>) {
         friendLocationOverlays.forEach { map.overlays.remove(it) }
         friendLocationOverlays.clear()
+        friendTooltip?.dismiss()
+        friendPoints.forEach { (friend, points) ->
+            if (points.isNotEmpty()) {
+                drawFriendLocation(friend, points, centerOnLastPoint = false, clearExisting = false)
+            }
+        }
+        map.invalidate()
+    }
+
+    private fun drawFriendLocation(
+        friend: FriendProfile,
+        points: List<LocationSharePoint>,
+        centerOnLastPoint: Boolean,
+        clearExisting: Boolean
+    ) {
+        if (clearExisting) clearFriendLocationOverlays()
         if (points.isEmpty()) {
             showSnackbar(getString(R.string.no_friend_locations), isLong = true)
             return
         }
+        val color = friendColor(friend)
         val polyline = Polyline(map).apply {
-            outlinePaint.color = ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink)
-            outlinePaint.strokeWidth = TRACK_STROKE_WIDTH
+            outlinePaint.color = color
+            outlinePaint.alpha = 110
+            outlinePaint.strokeWidth = dp(3).toFloat()
             outlinePaint.isAntiAlias = true
             setPoints(points.map { GeoPoint(it.latitude, it.longitude) })
         }
         val last = points.last()
+        val lastPoint = GeoPoint(last.latitude, last.longitude)
         val marker = Marker(map).apply {
-            position = GeoPoint(last.latitude, last.longitude)
-            title = friend.email
+            position = lastPoint
+            title = friend.displayName
+            icon = BitmapDrawable(resources, createFriendMarkerIcon(friend, color))
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+            setOnMarkerClickListener { _, _ ->
+                showFriendTooltip(friend, last, lastPoint)
+                true
+            }
         }
         friendLocationOverlays.add(polyline)
         friendLocationOverlays.add(marker)
         map.overlays.add(polyline)
         map.overlays.add(marker)
-        map.controller.animateTo(marker.position)
-        map.controller.setZoom(17.0)
-        marker.showInfoWindow()
+        if (centerOnLastPoint) {
+            map.controller.animateTo(marker.position)
+            map.controller.setZoom(17.0)
+            showFriendTooltip(friend, last, lastPoint)
+        }
         map.invalidate()
+    }
+
+    private fun clearFriendLocationOverlays() {
+        friendTooltip?.dismiss()
+        friendLocationOverlays.forEach { map.overlays.remove(it) }
+        friendLocationOverlays.clear()
+        map.invalidate()
+    }
+
+    private fun createSelfLocationIcon(): Bitmap {
+        val size = dp(12).coerceAtLeast(12)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val center = size / 2f
+        paint.color = Color.BLACK
+        canvas.drawCircle(center, center, center, paint)
+        paint.color = Color.WHITE
+        canvas.drawCircle(center, center, dp(1).coerceAtLeast(1).toFloat(), paint)
+        return bitmap
+    }
+
+    private fun createFriendMarkerIcon(friend: FriendProfile, fillColor: Int): Bitmap {
+        val size = dp(24).coerceAtLeast(24)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val center = size / 2f
+
+        paint.style = Paint.Style.FILL
+        paint.color = fillColor
+        canvas.drawCircle(center, center, center - dp(0.5f), paint)
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = dp(0.5f)
+        paint.color = Color.argb(180, 0, 0, 0)
+        canvas.drawCircle(center, center, center - paint.strokeWidth / 2f, paint)
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.BLACK
+        paint.typeface = Typeface.DEFAULT_BOLD
+        paint.textSize = dp(11).toFloat()
+        paint.textAlign = Paint.Align.CENTER
+        val initials = initialsForFriend(friend)
+        val bounds = Rect()
+        paint.getTextBounds(initials, 0, initials.length, bounds)
+        canvas.drawText(initials, center, center - bounds.exactCenterY(), paint)
+        return bitmap
+    }
+
+    private fun initialsForFriend(friend: FriendProfile): String {
+        val first = friend.displayFirstName.trim().firstOrNull()?.uppercaseChar()
+        val last = friend.displayLastName.trim().firstOrNull()?.uppercaseChar()
+        val fromName = listOfNotNull(first, last).joinToString("")
+        if (fromName.length >= 2) return fromName.take(2)
+
+        val emailPrefix = friend.email.substringBefore("@").filter { it.isLetterOrDigit() }
+        return emailPrefix.take(2).uppercase(Locale.getDefault()).ifBlank { "??" }
+    }
+
+    private fun friendColor(friend: FriendProfile): Int {
+        val colors = intArrayOf(
+            Color.rgb(205, 234, 142),
+            Color.rgb(244, 190, 124),
+            Color.rgb(244, 158, 124),
+            Color.rgb(238, 132, 156),
+            Color.rgb(218, 140, 206),
+            Color.rgb(186, 151, 232),
+            Color.rgb(148, 172, 238),
+            Color.rgb(126, 196, 234),
+            Color.rgb(119, 218, 213),
+            Color.rgb(120, 219, 170),
+            Color.rgb(149, 219, 121),
+            Color.rgb(196, 218, 118),
+            Color.rgb(234, 211, 119),
+            Color.rgb(235, 174, 119),
+            Color.rgb(235, 137, 128),
+            Color.rgb(209, 140, 184),
+            Color.rgb(158, 150, 227)
+        )
+        return colors[kotlin.math.abs(friend.userId.hashCode()) % colors.size]
+    }
+
+    private fun showFriendTooltip(friend: FriendProfile, point: LocationSharePoint, geoPoint: GeoPoint) {
+        friendTooltip?.dismiss()
+
+        val title = TextView(this).apply {
+            text = "${friend.displayName} (${distanceToFriend(point)})"
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val body = TextView(this).apply {
+            text = formatLocationUpdatedAt(point.recordedAtMillis)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 14f
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(243, 237, 247))
+                cornerRadius = dp(16).toFloat()
+            }
+            elevation = dp(6).toFloat()
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            addView(title)
+            addView(body, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(4) })
+        }
+
+        val width = dp(260)
+        val popup = PopupWindow(content, width, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(8).toFloat()
+        }
+        content.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val pointOnMap = Point()
+        map.projection.toPixels(geoPoint, pointOnMap)
+        val mapOnScreen = IntArray(2)
+        map.getLocationOnScreen(mapOnScreen)
+        val minX = mapOnScreen[0] + dp(12)
+        val maxX = mapOnScreen[0] + map.width - width - dp(12)
+        val minY = mapOnScreen[1] + dp(12)
+        val x = (mapOnScreen[0] + pointOnMap.x - width / 2).coerceIn(minX, maxX.coerceAtLeast(minX))
+        val y = (mapOnScreen[1] + pointOnMap.y - content.measuredHeight - dp(14)).coerceAtLeast(minY)
+        popup.showAtLocation(map, Gravity.NO_GRAVITY, x, y)
+        friendTooltip = popup
+    }
+
+    private fun distanceToFriend(point: LocationSharePoint): String {
+        val current = lastKnownUserLocation ?: locationOverlay?.myLocation?.let {
+            Location("map").apply {
+                latitude = it.latitude
+                longitude = it.longitude
+            }
+        } ?: return "—"
+        val result = FloatArray(1)
+        Location.distanceBetween(
+            current.latitude,
+            current.longitude,
+            point.latitude,
+            point.longitude,
+            result
+        )
+        return if (result[0] < 1000f) {
+            "${result[0].toInt()} м"
+        } else {
+            String.format(Locale.forLanguageTag("ru-RU"), "%.1f км", result[0] / 1000f)
+        }
+    }
+
+    private fun formatLocationUpdatedAt(timeMillis: Long): String {
+        val instant = Instant.ofEpochMilli(timeMillis)
+        val zone = ZoneId.systemDefault()
+        val date = instant.atZone(zone).toLocalDate()
+        val time = DateTimeFormatter.ofPattern("HH:mm", Locale.forLanguageTag("ru-RU")).format(instant.atZone(zone))
+        return if (date == LocalDate.now(zone)) {
+            getString(R.string.updated_at_time, time)
+        } else {
+            val formattedDate = DateTimeFormatter.ofPattern("d MMMM", Locale.forLanguageTag("ru-RU")).format(instant.atZone(zone))
+            getString(R.string.updated_at_date_time, formattedDate, time)
+        }
     }
 
     private fun registerRecordingReceiver() {
@@ -1871,6 +2331,9 @@ class MainActivity : AppCompatActivity() {
 
         if (locationOverlay == null) {
             locationOverlay = MyLocationNewOverlay(GpsMyLocationProvider(this), map).also { overlay ->
+                val selfIcon = createSelfLocationIcon()
+                overlay.setPersonIcon(selfIcon)
+                overlay.setDirectionArrow(selfIcon, selfIcon)
                 overlay.enableMyLocation()
                 if (shouldFollowLocation) {
                     overlay.enableFollowLocation()
@@ -2010,6 +2473,10 @@ class MainActivity : AppCompatActivity() {
         return (value * resources.displayMetrics.density).toInt()
     }
 
+    private fun dp(value: Float): Float {
+        return value * resources.displayMetrics.density
+    }
+
     private data class StatsPage(
         val title: String,
         val type: TrackType?,
@@ -2060,6 +2527,8 @@ class MainActivity : AppCompatActivity() {
         private const val TRACK_ACTION_RENAME = 1
         private const val TRACK_ACTION_VISIBILITY = 2
         private const val TRACK_ACTION_DELETE = 3
+        private const val FRIEND_ACTION_RENAME = 8
+        private const val FRIEND_ACTION_RESET_NAME = 9
         private const val FRIEND_ACTION_SHARE = 10
         private const val FRIEND_ACTION_DELETE = 11
         private const val TRACK_STROKE_WIDTH = 8f
@@ -2067,5 +2536,6 @@ class MainActivity : AppCompatActivity() {
         private const val FRIEND_HIGHLIGHT_DURATION_MS = 3_500L
         private const val SPLASH_VISIBLE_MS = 1_100L
         private const val SPLASH_DURATION_MS = 1_500L
+        private const val FRIEND_LOCATION_REFRESH_MS = 30_000L
     }
 }

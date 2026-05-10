@@ -83,6 +83,14 @@
     <string name="sharing_location_disabled">Вы не показываете себя</string>
     <string name="share_location">Делиться позицией</string>
     <string name="hide_myself">Не показывать себя</string>
+    <string name="edit_name">Изменить имя</string>
+    <string name="edit_friend_name">Изменить имя друга</string>
+    <string name="reset_friend_name">Вернуть исходное имя</string>
+    <string name="first_name">Имя</string>
+    <string name="last_name">Фамилия</string>
+    <string name="owner_name">Имя владельца: %1$s</string>
+    <string name="updated_at_time">Обновлено в %1$s</string>
+    <string name="updated_at_date_time">Обновлено %1$s в %2$s</string>
     <string name="delete_friend">Удалить из друзей</string>
     <string name="no_friend_locations">Нет точек за последние сутки</string>
 </resources>

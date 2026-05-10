@@ -200,10 +200,73 @@ class SupabaseApiClient(
                 friendshipId = item.getString("friendship_id"),
                 userId = item.getString("friend_id"),
                 email = item.optString("friend_email", ""),
+                firstName = item.optString("friend_first_name", ""),
+                lastName = item.optString("friend_last_name", ""),
+                aliasFirstName = item.optString("alias_first_name", ""),
+                aliasLastName = item.optString("alias_last_name", ""),
                 iShare = item.optBoolean("i_share", true),
                 friendShares = item.optBoolean("friend_shares", true)
             )
         }
+    }
+
+    fun fetchMyProfile(session: SupabaseSession): UserProfile {
+        val response = request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/my_profile",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = "{}".toByteArray(Charsets.UTF_8)
+        )
+        val array = JSONArray(response.text)
+        val item = array.optJSONObject(0)
+        return UserProfile(
+            userId = item?.optString("user_id", session.userId) ?: session.userId,
+            email = item?.optString("email", session.email.orEmpty()).orEmpty(),
+            firstName = item?.optString("first_name", "").orEmpty(),
+            lastName = item?.optString("last_name", "").orEmpty()
+        )
+    }
+
+    fun updateMyProfile(session: SupabaseSession, firstName: String, lastName: String) {
+        val body = JSONObject()
+            .put("first_name_value", firstName)
+            .put("last_name_value", lastName)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/update_my_profile",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = body
+        )
+    }
+
+    fun setFriendAlias(session: SupabaseSession, friendId: String, firstName: String, lastName: String) {
+        val body = JSONObject()
+            .put("friend", friendId)
+            .put("first_name_value", firstName)
+            .put("last_name_value", lastName)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/set_friend_alias",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = body
+        )
+    }
+
+    fun resetFriendAlias(session: SupabaseSession, friendId: String) {
+        val body = JSONObject()
+            .put("friend", friendId)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/reset_friend_alias",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = body
+        )
     }
 
     fun setFriendShare(session: SupabaseSession, friendshipId: String, isSharing: Boolean) {
@@ -415,9 +478,32 @@ data class FriendProfile(
     val friendshipId: String,
     val userId: String,
     val email: String,
+    val firstName: String,
+    val lastName: String,
+    val aliasFirstName: String,
+    val aliasLastName: String,
     val iShare: Boolean,
     val friendShares: Boolean
-)
+) {
+    val displayFirstName: String get() = aliasFirstName.ifBlank { firstName }
+    val displayLastName: String get() = aliasLastName.ifBlank { lastName }
+    val displayName: String
+        get() = listOf(displayFirstName, displayLastName)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .ifBlank { email.ifBlank { userId } }
+    val hasAlias: Boolean get() = aliasFirstName.isNotBlank() || aliasLastName.isNotBlank()
+}
+
+data class UserProfile(
+    val userId: String,
+    val email: String,
+    val firstName: String,
+    val lastName: String
+) {
+    val displayName: String
+        get() = listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ").ifBlank { email.ifBlank { userId } }
+}
 
 data class LocationSharePoint(
     val latitude: Double,
