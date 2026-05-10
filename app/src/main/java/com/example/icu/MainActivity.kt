@@ -1408,7 +1408,7 @@ class MainActivity : AppCompatActivity() {
             boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
             boxBackgroundColor = ContextCompat.getColor(this@MainActivity, R.color.icu_sheet_surface)
             setBoxCornerRadii(dp(4).toFloat(), dp(4).toFloat(), dp(4).toFloat(), dp(4).toFloat())
-            addView(input, ViewGroup.LayoutParams(
+            addView(input, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(64)
             ))
