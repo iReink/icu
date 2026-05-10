@@ -106,6 +106,7 @@ class MainActivity : AppCompatActivity() {
     private var isReceiverRegistered = false
     private var shouldFollowLocation = true
     private var wasRecording = false
+    private var pendingSavedTrackFileName: String? = null
     private var currentSection: Section = Section.NONE
     private var currentAuthStep: AuthStep = AuthStep.NONE
     private var lastAuthEmail: String = ""
@@ -160,6 +161,7 @@ class MainActivity : AppCompatActivity() {
 
     private val recordingStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            pendingSavedTrackFileName = intent?.getStringExtra(TrackRecordingService.EXTRA_SAVED_TRACK_FILE_NAME)
             syncRecordingState()
         }
     }
@@ -896,18 +898,54 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSnackbar(message: String, isLong: Boolean = false) {
+        showSnackbar(
+            message = message,
+            duration = if (isLong) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
+        )
+    }
+
+    private fun showSnackbar(
+        message: String,
+        duration: Int,
+        actionText: String? = null,
+        action: (() -> Unit)? = null
+    ) {
         val root = findViewById<View>(R.id.mainContent)
         Snackbar.make(
             root,
             message,
-            if (isLong) Snackbar.LENGTH_LONG else Snackbar.LENGTH_SHORT
+            duration
         ).apply {
             anchorView = when {
                 sectionPanel.visibility == View.VISIBLE -> null
                 addTrackFab.visibility == View.VISIBLE -> addTrackFab
                 else -> null
             }
+            if (actionText != null && action != null) {
+                setAction(actionText) { action() }
+            }
         }.show()
+    }
+
+    private fun showTrackSavedSnackbar(track: RecordedTrack) {
+        showSnackbar(
+            message = getString(R.string.track_saved_visible),
+            duration = TRACK_SAVED_SNACKBAR_MS,
+            actionText = getString(R.string.hide_action)
+        ) {
+            trackStore.setTrackVisibility(track, false)
+            syncTracksSilently()
+            loadSavedTracks()
+            showTracksScreenIfVisible()
+        }
+    }
+
+    private fun showSavedTrackSnackbarIfNeeded() {
+        val savedTrackFileName = pendingSavedTrackFileName ?: return
+        pendingSavedTrackFileName = null
+        trackStore.loadTracks()
+            .firstOrNull { track -> track.file.name == savedTrackFileName }
+            ?.let { savedTrack -> showTrackSavedSnackbar(savedTrack) }
     }
 
     private fun hideKeyboard() {
@@ -1021,6 +1059,7 @@ class MainActivity : AppCompatActivity() {
             activeTrackPolyline = null
             loadSavedTracks()
             if (wasRecording) {
+                showSavedTrackSnackbarIfNeeded()
                 syncTracksSilently()
             }
         }
@@ -2538,5 +2577,6 @@ class MainActivity : AppCompatActivity() {
         private const val SPLASH_VISIBLE_MS = 1_100L
         private const val SPLASH_DURATION_MS = 1_500L
         private const val FRIEND_LOCATION_REFRESH_MS = 30_000L
+        private const val TRACK_SAVED_SNACKBAR_MS = 10_000
     }
 }

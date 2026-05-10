@@ -105,12 +105,14 @@ class TrackRecordingService : Service() {
         lastLiveLocationUploadMillis = 0L
         recordingPoints.clear()
 
-        if (type != null && points.isNotEmpty()) {
+        val savedTrack = if (type != null && points.isNotEmpty()) {
             trackStore.saveTrack(type, points, distanceMeters, startedAtMillis)
+        } else {
+            null
         }
 
         currentState = RecordingState()
-        broadcastStateChanged()
+        broadcastStateChanged(savedTrack?.file?.name)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -282,8 +284,11 @@ class TrackRecordingService : Service() {
         manager.createNotificationChannel(channel)
     }
 
-    private fun broadcastStateChanged() {
+    private fun broadcastStateChanged(savedTrackFileName: String? = null) {
         val intent = Intent(ACTION_STATE_CHANGED).setPackage(packageName)
+        if (savedTrackFileName != null) {
+            intent.putExtra(EXTRA_SAVED_TRACK_FILE_NAME, savedTrackFileName)
+        }
         sendBroadcast(intent)
     }
 
@@ -292,6 +297,7 @@ class TrackRecordingService : Service() {
         const val ACTION_STOP = "com.example.icu.action.STOP_RECORDING"
         const val ACTION_STATE_CHANGED = "com.example.icu.action.RECORDING_STATE_CHANGED"
         const val EXTRA_TRACK_TYPE = "track_type"
+        const val EXTRA_SAVED_TRACK_FILE_NAME = "saved_track_file_name"
         const val HIGH_ACCURACY_INTERVAL_MS = 1_000L
         const val WALK_INTERVAL_MS = 3_000L
         const val BIKE_INTERVAL_MS = 2_000L

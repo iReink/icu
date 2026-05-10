@@ -36,6 +36,8 @@
     <string name="recording_already_started">Запись трека уже идёт</string>
     <string name="track_without_points">Трек не сохранён: нет GPS-точек</string>
     <string name="track_saved">Трек сохранён: %1$s</string>
+    <string name="track_saved_visible">Трек сохранён и отображается на карте</string>
+    <string name="hide_action">скрыть</string>
     <string name="recording_notification_title">ICU записывает трек</string>
     <string name="recording_notification_stop">Стоп</string>
     <string name="location_provider_disabled">Включи геолокацию на устройстве</string>
