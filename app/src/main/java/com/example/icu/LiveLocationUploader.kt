@@ -9,6 +9,8 @@ class LiveLocationUploader(context: Context) {
     private val queue = LiveLocationQueue(context.applicationContext)
 
     fun enqueueAndFlush(location: Location) {
+        if (!TrackRecordingService.isUsableLocation(location)) return
+
         val point = LocationSharePoint(
             latitude = location.latitude,
             longitude = location.longitude,

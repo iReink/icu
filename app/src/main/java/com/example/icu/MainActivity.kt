@@ -2430,6 +2430,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun uploadForegroundLiveLocation(location: Location) {
         if (TrackRecordingService.currentState.isRecording) return
+        if (!TrackRecordingService.isUsableLocation(location)) return
         val now = System.currentTimeMillis()
         if (now - lastForegroundLiveUploadMillis < TrackRecordingService.LIVE_LOCATION_INTERVAL_MS) return
         lastForegroundLiveUploadMillis = now

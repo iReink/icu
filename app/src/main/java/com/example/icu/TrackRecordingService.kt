@@ -148,16 +148,9 @@ class TrackRecordingService : Service() {
 
         val previous = recordingPoints.lastOrNull()
         if (previous != null) {
-            val distance = FloatArray(1)
-            Location.distanceBetween(
-                previous.latitude,
-                previous.longitude,
-                point.latitude,
-                point.longitude,
-                distance
-            )
-            if (distance[0] >= MIN_DISTANCE_FOR_DISTANCE_METERS) {
-                recordingDistanceMeters += distance[0]
+            val distance = segmentDistanceMeters(previous, point)
+            if (isMeaningfulMovement(previous, point, distance)) {
+                recordingDistanceMeters += distance
             }
         }
 
@@ -184,7 +177,7 @@ class TrackRecordingService : Service() {
     }
 
     private fun isUsableTrackLocation(location: Location): Boolean {
-        return !location.hasAccuracy() || location.accuracy <= MAX_ACCEPTED_ACCURACY_METERS
+        return isUsableLocation(location)
     }
 
     private fun selectLocationProvider(): String? {
@@ -303,7 +296,7 @@ class TrackRecordingService : Service() {
         const val WALK_INTERVAL_MS = 3_000L
         const val BIKE_INTERVAL_MS = 2_000L
         const val MAX_ACCEPTED_ACCURACY_METERS = 50f
-        const val MIN_DISTANCE_FOR_DISTANCE_METERS = 0.5f
+        const val MIN_MOVEMENT_METERS_PER_SECOND = 0.5f
         const val LIVE_LOCATION_INTERVAL_MS = 10_000L
 
         private const val CHANNEL_ID = "track_recording"
@@ -313,5 +306,39 @@ class TrackRecordingService : Service() {
         @Volatile
         var currentState: RecordingState = RecordingState()
             private set
+
+        fun isUsableLocation(location: Location): Boolean {
+            return !location.hasAccuracy() || location.accuracy <= MAX_ACCEPTED_ACCURACY_METERS
+        }
+
+        fun segmentDistanceMeters(previous: TrackPoint, current: TrackPoint): Float {
+            val distance = FloatArray(1)
+            Location.distanceBetween(
+                previous.latitude,
+                previous.longitude,
+                current.latitude,
+                current.longitude,
+                distance
+            )
+            return distance[0]
+        }
+
+        fun isMeaningfulMovement(
+            previous: TrackPoint,
+            current: TrackPoint,
+            distanceMeters: Float = segmentDistanceMeters(previous, current)
+        ): Boolean {
+            return distanceMeters > movementNoiseThresholdMeters(previous, current)
+        }
+
+        fun movementNoiseThresholdMeters(previous: TrackPoint, current: TrackPoint): Float {
+            val elapsedMillis = (current.timeMillis - previous.timeMillis).coerceAtLeast(0L)
+            val elapsedSeconds = if (elapsedMillis > 0L) {
+                elapsedMillis / 1000f
+            } else {
+                HIGH_ACCURACY_INTERVAL_MS / 1000f
+            }
+            return MIN_MOVEMENT_METERS_PER_SECOND * elapsedSeconds
+        }
     }
 }

@@ -1,7 +1,6 @@
 package com.example.icu
 
 import android.content.Context
-import android.location.Location
 import android.util.Xml
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
@@ -205,16 +204,9 @@ class GpxTrackStore(private val context: Context) {
         fun calculateDistance(points: List<TrackPoint>): Float {
             var distanceMeters = 0f
             points.zipWithNext { previous, current ->
-                val result = FloatArray(1)
-                Location.distanceBetween(
-                    previous.latitude,
-                    previous.longitude,
-                    current.latitude,
-                    current.longitude,
-                    result
-                )
-                if (result[0] >= TrackRecordingService.MIN_DISTANCE_FOR_DISTANCE_METERS) {
-                    distanceMeters += result[0]
+                val segmentDistanceMeters = TrackRecordingService.segmentDistanceMeters(previous, current)
+                if (TrackRecordingService.isMeaningfulMovement(previous, current, segmentDistanceMeters)) {
+                    distanceMeters += segmentDistanceMeters
                 }
             }
             return distanceMeters
