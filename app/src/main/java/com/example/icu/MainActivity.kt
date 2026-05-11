@@ -72,6 +72,7 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
@@ -108,7 +109,7 @@ class MainActivity : AppCompatActivity() {
     private var pendingInviteToken: String? = null
     private var highlightedFriendshipId: String? = null
     private var savedTrackOverlays = mutableListOf<Polyline>()
-    private var friendLocationOverlays = mutableListOf<org.osmdroid.views.overlay.Overlay>()
+    private var friendLocationOverlays = mutableListOf<Overlay>()
     private var activeTrackPolyline: Polyline? = null
     private var isReceiverRegistered = false
     private var shouldFollowLocation = true
@@ -120,7 +121,12 @@ class MainActivity : AppCompatActivity() {
     private var authRootView: LinearLayout? = null
     private var lastForegroundLiveUploadMillis = 0L
     private var lastKnownUserLocation: Location? = null
+    private var cachedUserProfile: UserProfile? = null
+    private var cachedFriends: List<FriendProfile> = emptyList()
+    private var cachedFriendLocations: Map<String, List<LocationSharePoint>> = emptyMap()
+    private var lastProfileRefreshMillis = 0L
     private var friendLocationRefreshInFlight = false
+    private var profileRefreshInFlight = false
     private var friendTooltip: PopupWindow? = null
     private var infoTooltip: PopupWindow? = null
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
@@ -1365,29 +1371,43 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val cachedProfile = cachedUserProfile
+        if (cachedProfile != null) {
+            renderProfileWithFriends(cachedProfile, cachedFriends)
+            loadProfileAndFriends(force = false, showErrors = false)
+            return
+        }
+
         sectionContent.addView(profileStatusCard(session.email ?: session.userId, onEdit = null))
         sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
         })
         sectionContent.addView(groupTitle(getString(R.string.friends)))
         sectionContent.addView(emptyStateText(getString(R.string.loading)))
-        loadProfileAndFriends()
+        loadProfileAndFriends(force = true, showErrors = true)
         sectionContent.addView(destructiveGhostButton(getString(R.string.sign_out)) {
-            sessionStore.clear()
-            clearFriendLocationOverlays()
-            stopForegroundLiveLocationUpdates()
-            showProfileScreen()
+            signOut()
         })
     }
 
-    private fun loadProfileAndFriends() {
+    private fun loadProfileAndFriends(force: Boolean = false, showErrors: Boolean = false) {
         val session = sessionStore.current() ?: return
+        val now = System.currentTimeMillis()
+        if (!force && cachedUserProfile != null && now - lastProfileRefreshMillis < PROFILE_REFRESH_MS) {
+            return
+        }
+        if (profileRefreshInFlight) return
+        profileRefreshInFlight = true
         backgroundExecutor.execute {
             runCatching {
                 val activeSession = supabaseClient.activeSession()
                 supabaseClient.fetchMyProfile(activeSession) to supabaseClient.fetchFriends(activeSession)
             }.onSuccess { (profile, friends) ->
                 runOnUiThread {
+                    profileRefreshInFlight = false
+                    cachedUserProfile = profile
+                    cachedFriends = friends
+                    lastProfileRefreshMillis = System.currentTimeMillis()
                     if (currentSection == Section.PROFILE) {
                         renderProfileWithFriends(profile, friends)
                     }
@@ -1395,7 +1415,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    if (currentSection == Section.PROFILE) {
+                    profileRefreshInFlight = false
+                    if (showErrors && currentSection == Section.PROFILE) {
                         showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
                     }
                 }
@@ -1427,11 +1448,25 @@ class MainActivity : AppCompatActivity() {
             }, FRIEND_HIGHLIGHT_DURATION_MS)
         }
         sectionContent.addView(destructiveGhostButton(getString(R.string.sign_out)) {
-            sessionStore.clear()
-            clearFriendLocationOverlays()
-            stopForegroundLiveLocationUpdates()
-            showProfileScreen()
+            signOut()
         })
+    }
+
+    private fun signOut() {
+        sessionStore.clear()
+        cachedUserProfile = null
+        cachedFriends = emptyList()
+        cachedFriendLocations = emptyMap()
+        lastProfileRefreshMillis = 0L
+        clearFriendLocationOverlays()
+        stopForegroundLiveLocationUpdates()
+        showProfileScreen()
+    }
+
+    private fun invalidateProfileCache() {
+        cachedUserProfile = null
+        cachedFriends = emptyList()
+        lastProfileRefreshMillis = 0L
     }
 
     private fun shareFriendInvite() {
@@ -1469,7 +1504,10 @@ class MainActivity : AppCompatActivity() {
             runCatching {
                 supabaseClient.updateMyProfile(supabaseClient.activeSession(), firstName, lastName)
             }.onSuccess {
-                runOnUiThread { showProfileScreen() }
+                runOnUiThread {
+                    invalidateProfileCache()
+                    showProfileScreen()
+                }
             }.onFailure { error ->
                 runOnUiThread {
                     showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
@@ -1604,6 +1642,7 @@ class MainActivity : AppCompatActivity() {
                 pendingInviteToken = null
                 highlightedFriendshipId = friendshipId
                 runOnUiThread {
+                    invalidateProfileCache()
                     bottomNavigation.selectedItemId = R.id.navProfile
                     showSnackbar(getString(R.string.friend_added), isLong = true)
                     showProfileScreen()
@@ -1617,18 +1656,37 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showFriendOnMap(friend: FriendProfile) {
+        val cachedPoints = cachedFriendLocations[friend.userId].orEmpty()
+        hideSection()
+        bottomNavigation.selectedItemId = R.id.navMap
+        if (cachedPoints.isNotEmpty()) {
+            drawFriendPoints(cachedFriendPointPairs())
+            centerFriendOnMap(friend, cachedPoints.last())
+        }
+
         backgroundExecutor.execute {
             runCatching {
                 supabaseClient.fetchFriendLocations(supabaseClient.activeSession(), friend.userId)
             }.onSuccess { points ->
                 runOnUiThread {
-                    hideSection()
-                    bottomNavigation.selectedItemId = R.id.navMap
-                    drawFriendLocation(friend, points, centerOnLastPoint = true, clearExisting = false)
+                    cachedFriendLocations = cachedFriendLocations.toMutableMap().apply {
+                        put(friend.userId, points)
+                    }
+                    drawFriendPoints(cachedFriendPointPairs())
+                    val latest = points.lastOrNull()
+                    if (latest == null) {
+                        if (cachedPoints.isEmpty()) {
+                            showSnackbar(getString(R.string.no_friend_locations), isLong = true)
+                        }
+                    } else if (cachedPoints.isEmpty() || latest.recordedAtMillis > cachedPoints.last().recordedAtMillis) {
+                        centerFriendOnMap(friend, latest)
+                    }
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
+                    if (cachedPoints.isEmpty()) {
+                        showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
+                    }
                 }
             }
         }
@@ -2289,6 +2347,7 @@ class MainActivity : AppCompatActivity() {
                 supabaseClient.setFriendShare(supabaseClient.activeSession(), friend.friendshipId, isSharing)
             }.onSuccess {
                 runOnUiThread {
+                    invalidateProfileCache()
                     showProfileScreen()
                     refreshFriendLocationsOnMap()
                 }
@@ -2302,6 +2361,7 @@ class MainActivity : AppCompatActivity() {
                 supabaseClient.setFriendAlias(supabaseClient.activeSession(), friend.userId, firstName, lastName)
             }.onSuccess {
                 runOnUiThread {
+                    invalidateProfileCache()
                     showProfileScreen()
                     refreshFriendLocationsOnMap()
                 }
@@ -2319,6 +2379,7 @@ class MainActivity : AppCompatActivity() {
                 supabaseClient.resetFriendAlias(supabaseClient.activeSession(), friend.userId)
             }.onSuccess {
                 runOnUiThread {
+                    invalidateProfileCache()
                     showProfileScreen()
                     refreshFriendLocationsOnMap()
                 }
@@ -2336,6 +2397,8 @@ class MainActivity : AppCompatActivity() {
                 supabaseClient.deleteFriend(supabaseClient.activeSession(), friend.friendshipId)
             }.onSuccess {
                 runOnUiThread {
+                    invalidateProfileCache()
+                    cachedFriendLocations = cachedFriendLocations.toMutableMap().apply { remove(friend.userId) }
                     showProfileScreen()
                     refreshFriendLocationsOnMap()
                 }
@@ -2366,6 +2429,8 @@ class MainActivity : AppCompatActivity() {
             }.onSuccess { friendPoints ->
                 runOnUiThread {
                     friendLocationRefreshInFlight = false
+                    cachedFriends = friendPoints.map { it.first }
+                    updateCachedFriendLocations(friendPoints)
                     drawFriendPoints(friendPoints)
                 }
             }.onFailure {
@@ -2388,9 +2453,22 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }.onSuccess { friendPoints ->
-                runOnUiThread { drawFriendPoints(friendPoints) }
+                runOnUiThread {
+                    updateCachedFriendLocations(friendPoints)
+                    drawFriendPoints(friendPoints)
+                }
             }
         }
+    }
+
+    private fun updateCachedFriendLocations(friendPoints: List<Pair<FriendProfile, List<LocationSharePoint>>>) {
+        cachedFriendLocations = cachedFriendLocations.toMutableMap().apply {
+            friendPoints.forEach { (friend, points) -> put(friend.userId, points) }
+        }
+    }
+
+    private fun cachedFriendPointPairs(): List<Pair<FriendProfile, List<LocationSharePoint>>> {
+        return cachedFriends.map { friend -> friend to cachedFriendLocations[friend.userId].orEmpty() }
     }
 
     private fun drawFriendPoints(friendPoints: List<Pair<FriendProfile, List<LocationSharePoint>>>) {
@@ -2441,11 +2519,20 @@ class MainActivity : AppCompatActivity() {
         map.overlays.add(polyline)
         map.overlays.add(marker)
         if (centerOnLastPoint) {
-            map.controller.animateTo(marker.position)
-            map.controller.setZoom(17.0)
-            showFriendTooltip(friend, last, lastPoint)
+            centerFriendOnMap(friend, last)
         }
         map.invalidate()
+    }
+
+    private fun centerFriendOnMap(friend: FriendProfile, point: LocationSharePoint) {
+        val geoPoint = GeoPoint(point.latitude, point.longitude)
+        friendTooltip?.dismiss()
+        map.controller.animateTo(geoPoint, 17.0, FRIEND_MAP_ANIMATION_MS)
+        elapsedHandler.postDelayed({
+            if (bottomNavigation.selectedItemId == R.id.navMap && sectionPanel.visibility != View.VISIBLE) {
+                showFriendTooltip(friend, point, geoPoint)
+            }
+        }, FRIEND_MAP_ANIMATION_MS + FRIEND_TOOLTIP_DELAY_MS)
     }
 
     private fun clearFriendLocationOverlays() {
@@ -2638,6 +2725,8 @@ class MainActivity : AppCompatActivity() {
                 val selfIcon = createSelfLocationIcon()
                 overlay.setPersonIcon(selfIcon)
                 overlay.setDirectionArrow(selfIcon, selfIcon)
+                overlay.setPersonAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                overlay.setDirectionAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                 overlay.enableMyLocation()
                 if (shouldFollowLocation) {
                     overlay.enableFollowLocation()
@@ -2842,6 +2931,9 @@ class MainActivity : AppCompatActivity() {
         private const val SPLASH_VISIBLE_MS = 1_100L
         private const val SPLASH_DURATION_MS = 1_500L
         private const val FRIEND_LOCATION_REFRESH_MS = 30_000L
+        private const val PROFILE_REFRESH_MS = 60_000L
+        private const val FRIEND_MAP_ANIMATION_MS = 450L
+        private const val FRIEND_TOOLTIP_DELAY_MS = 80L
         private const val TRACK_SAVED_SNACKBAR_MS = 10_000
         private const val CHANGELOG_ASSET_NAME = "CHANGELOG.md"
     }
