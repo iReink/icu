@@ -62,6 +62,7 @@ import com.google.android.material.card.MaterialCardView
 import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
@@ -70,6 +71,7 @@ import com.google.android.material.textfield.TextInputLayout
 import androidx.viewpager2.widget.ViewPager2
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.cachemanager.CacheManager
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -85,7 +87,9 @@ import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
@@ -133,6 +137,11 @@ class MainActivity : AppCompatActivity() {
     private var lastProfileRefreshMillis = 0L
     private var friendLocationRefreshInFlight = false
     private var profileRefreshInFlight = false
+    private var mapTileDownloadSession = 0
+    private var mapTileDownloadProgressContainer: View? = null
+    private var mapTileDownloadProgress: LinearProgressIndicator? = null
+    private var mapTileDownloadStatus: TextView? = null
+    private var mapTileDownloadButton: MaterialButton? = null
     private var friendTooltip: PopupWindow? = null
     private var infoTooltip: PopupWindow? = null
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
@@ -1323,11 +1332,20 @@ class MainActivity : AppCompatActivity() {
             sectionContent.addView(mapTileZoomCard(option, selectedZooms))
         }
 
-        sectionContent.addView(primaryFullWidthButton(getString(R.string.download_selected_scales)) {
-            startMapTileDownload(boundingBox, selectedZooms.toList().sorted())
-        }.apply {
-            (layoutParams as? LinearLayout.LayoutParams)?.topMargin = dp(14)
-        })
+        sectionContent.addView(mapTileDownloadProgressCard())
+        mapTileDownloadButton = MaterialButton(this).apply {
+            text = getString(R.string.download_selected_scales)
+            isAllCaps = false
+            setOnClickListener { startMapTileDownload(boundingBox, selectedZooms.toList().sorted()) }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52)
+            ).apply {
+                topMargin = dp(14)
+                bottomMargin = dp(12)
+            }
+        }
+        sectionContent.addView(mapTileDownloadButton)
     }
 
     private fun mapTileDownloadOptions(boundingBox: org.osmdroid.util.BoundingBox): List<MapTileDownloadOption> {
@@ -1414,6 +1432,47 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun mapTileDownloadProgressCard(): View {
+        val progress = LinearProgressIndicator(this).apply {
+            isIndeterminate = false
+            max = 100
+            progress = 0
+        }
+        val status = TextView(this).apply {
+            text = getString(R.string.map_area_download_waiting)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 13f
+        }
+        val card = MaterialCardView(this).apply {
+            visibility = View.GONE
+            radius = dp(8).toFloat()
+            cardElevation = 0f
+            strokeWidth = 0
+            setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.white))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(10)
+            }
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+                addView(status)
+                addView(progress, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dp(10)
+                })
+            })
+        }
+        mapTileDownloadProgressContainer = card
+        mapTileDownloadProgress = progress
+        mapTileDownloadStatus = status
+        return card
+    }
+
     private fun startMapTileDownload(
         boundingBox: org.osmdroid.util.BoundingBox,
         selectedZooms: List<Int>
@@ -1422,16 +1481,32 @@ class MainActivity : AppCompatActivity() {
             showSnackbar(getString(R.string.select_at_least_one_scale))
             return
         }
+        val tileSource = map.tileProvider.tileSource
+        val onlineTileSource = tileSource as? OnlineTileSourceBase
+        if (onlineTileSource == null || !onlineTileSource.tileSourcePolicy.acceptsBulkDownload()) {
+            showMapTileDownloadInlineError(getString(R.string.map_area_download_source_not_allowed))
+            return
+        }
+
         val tileCount = selectedZooms.sumOf { zoom ->
             runCatching { CacheManager.getTilesCoverage(boundingBox, zoom).size }.getOrDefault(0)
         }
         val ranges = selectedZooms.toConsecutiveRanges()
-        val completedRanges = java.util.concurrent.atomic.AtomicInteger(0)
-        val failedRanges = java.util.concurrent.atomic.AtomicInteger(0)
+        val completedRanges = AtomicInteger(0)
+        val failedRanges = AtomicInteger(0)
         val totalRanges = ranges.size
+        val rangeProgress = ConcurrentHashMap<IntRange, Int>()
+        val sessionId = ++mapTileDownloadSession
 
         runCatching {
             val cacheManager = CacheManager(map)
+            mapTileDownloadButton?.isEnabled = false
+            updateMapTileDownloadProgress(
+                sessionId = sessionId,
+                downloadedTiles = 0,
+                totalTiles = tileCount,
+                message = getString(R.string.map_area_download_progress, 0, tileCount)
+            )
             ranges.forEach { range ->
                 cacheManager.downloadAreaAsyncNoUI(
                     this,
@@ -1441,13 +1516,26 @@ class MainActivity : AppCompatActivity() {
                     object : CacheManager.CacheManagerCallback {
                         override fun onTaskComplete() {
                             runOnUiThread {
+                                if (sessionId != mapTileDownloadSession) return@runOnUiThread
                                 if (completedRanges.incrementAndGet() + failedRanges.get() == totalRanges) {
+                                    finishMapTileDownloadProgress(sessionId, tileCount)
                                     showSnackbar(getString(R.string.map_area_download_complete), isLong = true)
                                 }
                             }
                         }
 
-                        override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) = Unit
+                        override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
+                            rangeProgress[range] = progress.coerceAtLeast(0)
+                            val downloadedTiles = rangeProgress.values.sum().coerceAtMost(tileCount)
+                            runOnUiThread {
+                                updateMapTileDownloadProgress(
+                                    sessionId = sessionId,
+                                    downloadedTiles = downloadedTiles,
+                                    totalTiles = tileCount,
+                                    message = getString(R.string.map_area_download_progress, downloadedTiles, tileCount)
+                                )
+                            }
+                        }
 
                         override fun downloadStarted() = Unit
 
@@ -1455,7 +1543,10 @@ class MainActivity : AppCompatActivity() {
 
                         override fun onTaskFailed(errors: Int) {
                             runOnUiThread {
+                                if (sessionId != mapTileDownloadSession) return@runOnUiThread
                                 if (failedRanges.incrementAndGet() + completedRanges.get() == totalRanges) {
+                                    mapTileDownloadButton?.isEnabled = true
+                                    mapTileDownloadStatus?.text = getString(R.string.map_area_download_failed)
                                     showSnackbar(getString(R.string.map_area_download_failed), isLong = true)
                                 }
                             }
@@ -1465,8 +1556,44 @@ class MainActivity : AppCompatActivity() {
             }
             showSnackbar(getString(R.string.map_area_download_started, tileCount), isLong = true)
         }.onFailure { error ->
+            mapTileDownloadButton?.isEnabled = true
             showSnackbar(getString(R.string.map_area_download_error, userMessage(error)), isLong = true)
         }
+    }
+
+    private fun updateMapTileDownloadProgress(
+        sessionId: Int,
+        downloadedTiles: Int,
+        totalTiles: Int,
+        message: String
+    ) {
+        if (sessionId != mapTileDownloadSession) return
+        mapTileDownloadProgressContainer?.visibility = View.VISIBLE
+        mapTileDownloadStatus?.text = message
+        val progressPercent = if (totalTiles > 0) {
+            (downloadedTiles * 100f / totalTiles).roundToInt().coerceIn(0, 100)
+        } else {
+            0
+        }
+        mapTileDownloadProgress?.setProgressCompat(progressPercent, true)
+    }
+
+    private fun finishMapTileDownloadProgress(sessionId: Int, totalTiles: Int) {
+        updateMapTileDownloadProgress(
+            sessionId = sessionId,
+            downloadedTiles = totalTiles,
+            totalTiles = totalTiles,
+            message = getString(R.string.map_area_download_progress, totalTiles, totalTiles)
+        )
+        mapTileDownloadStatus?.text = getString(R.string.map_area_download_complete)
+        mapTileDownloadButton?.isEnabled = true
+    }
+
+    private fun showMapTileDownloadInlineError(message: String) {
+        mapTileDownloadProgressContainer?.visibility = View.VISIBLE
+        mapTileDownloadProgress?.setProgressCompat(0, false)
+        mapTileDownloadStatus?.text = message
+        showSnackbar(message, isLong = true)
     }
 
     private fun List<Int>.toConsecutiveRanges(): List<IntRange> {
