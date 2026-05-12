@@ -11,15 +11,22 @@ class LiveLocationUploader(context: Context) {
     fun enqueueAndFlush(location: Location) {
         if (!TrackRecordingService.isUsableLocation(location)) return
 
-        val point = LocationSharePoint(
-            latitude = location.latitude,
-            longitude = location.longitude,
-            altitude = if (location.hasAltitude()) location.altitude else null,
-            accuracyMeters = if (location.hasAccuracy()) location.accuracy else null,
-            recordedAtMillis = location.time.takeIf { it > 0L } ?: System.currentTimeMillis()
-        )
+        enqueueAndFlush(location.toSharePoint())
+    }
+
+    fun enqueueAndFlush(point: LocationSharePoint) {
         queue.enqueue(point)
         flush()
+    }
+
+    private fun Location.toSharePoint(): LocationSharePoint {
+        return LocationSharePoint(
+            latitude = latitude,
+            longitude = longitude,
+            altitude = if (hasAltitude()) altitude else null,
+            accuracyMeters = if (hasAccuracy()) accuracy else null,
+            recordedAtMillis = time.takeIf { it > 0L } ?: System.currentTimeMillis()
+        )
     }
 
     fun flush() {

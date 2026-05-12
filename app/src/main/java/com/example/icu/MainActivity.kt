@@ -106,6 +106,8 @@ class MainActivity : AppCompatActivity() {
     private var locationOverlay: MyLocationNewOverlay? = null
     private var addTrackSheet: BottomSheetDialog? = null
     private var pendingStartType: TrackType? = null
+    private var hasPendingLocationBroadcastStart = false
+    private var pendingLocationBroadcastDurationMs: Long? = null
     private var pendingInviteToken: String? = null
     private var highlightedFriendshipId: String? = null
     private var savedTrackOverlays = mutableListOf<Polyline>()
@@ -158,18 +160,28 @@ class MainActivity : AppCompatActivity() {
 
             if (isGranted) {
                 enableMyLocation(follow = shouldFollowLocation)
-                continuePendingRecordingStart()
+                when {
+                    pendingStartType != null -> continuePendingRecordingStart()
+                    hasPendingLocationBroadcastStart -> continuePendingLocationBroadcastStart()
+                }
             } else {
                 pendingStartType = null
+                hasPendingLocationBroadcastStart = false
+                pendingLocationBroadcastDurationMs = null
             }
         }
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
             if (isGranted) {
-                startPendingRecording()
+                when {
+                    pendingStartType != null -> startPendingRecording()
+                    hasPendingLocationBroadcastStart -> startPendingLocationBroadcast()
+                }
             } else {
                 pendingStartType = null
+                hasPendingLocationBroadcastStart = false
+                pendingLocationBroadcastDurationMs = null
             }
         }
 
@@ -177,6 +189,9 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             pendingSavedTrackFileName = intent?.getStringExtra(TrackRecordingService.EXTRA_SAVED_TRACK_FILE_NAME)
             syncRecordingState()
+            if (intent?.action == LocationBroadcastService.ACTION_STATE_CHANGED && currentSection == Section.PROFILE) {
+                showProfileScreen()
+            }
         }
     }
 
@@ -1383,6 +1398,7 @@ class MainActivity : AppCompatActivity() {
             shareFriendInvite()
         })
         sectionContent.addView(groupTitle(getString(R.string.friends)))
+        sectionContent.addView(locationBroadcastRow())
         sectionContent.addView(emptyStateText(getString(R.string.loading)))
         loadProfileAndFriends(force = true, showErrors = true)
         sectionContent.addView(destructiveGhostButton(getString(R.string.sign_out)) {
@@ -1434,6 +1450,7 @@ class MainActivity : AppCompatActivity() {
             shareFriendInvite()
         })
         sectionContent.addView(groupTitle(getString(R.string.friends)))
+        sectionContent.addView(locationBroadcastRow())
         if (friends.isEmpty()) {
             sectionContent.addView(emptyStateText(getString(R.string.no_friends)))
         } else {
@@ -1460,6 +1477,9 @@ class MainActivity : AppCompatActivity() {
         lastProfileRefreshMillis = 0L
         clearFriendLocationOverlays()
         stopForegroundLiveLocationUpdates()
+        if (LocationBroadcastService.state(this).isActive) {
+            stopLocationBroadcast(refreshProfile = false)
+        }
         showProfileScreen()
     }
 
@@ -1467,6 +1487,189 @@ class MainActivity : AppCompatActivity() {
         cachedUserProfile = null
         cachedFriends = emptyList()
         lastProfileRefreshMillis = 0L
+    }
+
+    private fun locationBroadcastRow(): View {
+        val state = LocationBroadcastService.state(this)
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.bg_track_cell)
+            setPadding(dp(14), dp(10), dp(8), dp(10))
+            setOnClickListener {
+                if (LocationBroadcastService.state(this@MainActivity).isActive) {
+                    confirmStopLocationBroadcast()
+                } else {
+                    showLocationBroadcastDurationSheet()
+                }
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(8)
+            }
+        }
+        row.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.location_broadcast_title)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 16f
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            if (state.isActive) {
+                addView(TextView(this@MainActivity).apply {
+                    text = locationBroadcastCaption(state)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                    textSize = 13f
+                })
+            }
+        })
+        row.addView(com.google.android.material.switchmaterial.SwitchMaterial(this).apply {
+            isChecked = state.isActive
+            isClickable = false
+        })
+        return row
+    }
+
+    private fun locationBroadcastCaption(state: LocationBroadcastState): String {
+        val endsAt = state.endsAtMillis
+            ?: return getString(R.string.location_broadcast_active_manual)
+        val remaining = (endsAt - System.currentTimeMillis()).coerceAtLeast(0L)
+        return getString(
+            R.string.location_broadcast_active_time,
+            LocationBroadcastService.formatRemainingTime(remaining)
+        )
+    }
+
+    private fun showLocationBroadcastDurationSheet() {
+        val sheet = BottomSheetDialog(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_bottom_sheet)
+            setPadding(dp(20), dp(14), dp(20), dp(28))
+            addView(View(this@MainActivity).apply {
+                setBackgroundResource(R.drawable.bg_sheet_handle)
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(6)).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    bottomMargin = dp(36)
+                }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.location_broadcast_duration_title)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 28f
+                typeface = Typeface.DEFAULT
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dp(18)
+                }
+            })
+            locationBroadcastOptions().forEach { option ->
+                addView(locationBroadcastOptionButton(option.first) {
+                    sheet.dismiss()
+                    requestStartLocationBroadcast(option.second)
+                })
+            }
+        }
+        sheet.setContentView(content)
+        sheet.setOnShowListener { dialog ->
+            val bottomSheet = (dialog as BottomSheetDialog)
+                .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+            bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
+        }
+        sheet.show()
+    }
+
+    private fun locationBroadcastOptions(): List<Pair<String, Long?>> {
+        return listOf(
+            getString(R.string.location_broadcast_15_minutes) to 15 * 60_000L,
+            getString(R.string.location_broadcast_1_hour) to 60 * 60_000L,
+            getString(R.string.location_broadcast_4_hours) to 4 * 60 * 60_000L,
+            getString(R.string.location_broadcast_8_hours) to 8 * 60 * 60_000L,
+            getString(R.string.location_broadcast_until_manual_option) to null
+        )
+    }
+
+    private fun locationBroadcastOptionButton(textValue: String, onClick: () -> Unit): View {
+        return MaterialButton(this).apply {
+            text = textValue
+            isAllCaps = false
+            textSize = 16f
+            gravity = Gravity.CENTER_VERTICAL
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_surface)
+            cornerRadius = dp(8)
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52)
+            ).apply {
+                bottomMargin = dp(8)
+            }
+        }
+    }
+
+    private fun requestStartLocationBroadcast(durationMs: Long?) {
+        if (sessionStore.current() == null) {
+            showSnackbar(getString(R.string.sign_in_for_sync), isLong = true)
+            return
+        }
+        hasPendingLocationBroadcastStart = true
+        pendingLocationBroadcastDurationMs = durationMs
+        if (!hasLocationPermission()) {
+            requestLocationPermission()
+            return
+        }
+        continuePendingLocationBroadcastStart()
+    }
+
+    private fun continuePendingLocationBroadcastStart() {
+        if (!hasPendingLocationBroadcastStart) return
+        if (!hasNotificationPermission()) {
+            requestNotificationPermission()
+            return
+        }
+        startPendingLocationBroadcast()
+    }
+
+    private fun startPendingLocationBroadcast() {
+        if (!hasPendingLocationBroadcastStart) return
+        val durationMs = pendingLocationBroadcastDurationMs
+        hasPendingLocationBroadcastStart = false
+        pendingLocationBroadcastDurationMs = null
+
+        val intent = Intent(this, LocationBroadcastService::class.java).apply {
+            action = LocationBroadcastService.ACTION_START
+            durationMs?.let { putExtra(LocationBroadcastService.EXTRA_DURATION_MS, it) }
+        }
+        ContextCompat.startForegroundService(this, intent)
+        showProfileScreen()
+    }
+
+    private fun confirmStopLocationBroadcast() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.location_broadcast_stop_title)
+            .setMessage(R.string.location_broadcast_stop_message)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.location_broadcast_stop_action) { _, _ ->
+                stopLocationBroadcast()
+            }
+            .show()
+    }
+
+    private fun stopLocationBroadcast(refreshProfile: Boolean = true) {
+        val intent = Intent(this, LocationBroadcastService::class.java).apply {
+            action = LocationBroadcastService.ACTION_STOP
+        }
+        startService(intent)
+        if (refreshProfile) {
+            showProfileScreen()
+        }
     }
 
     private fun shareFriendInvite() {
@@ -2705,7 +2908,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun registerRecordingReceiver() {
         if (isReceiverRegistered) return
-        val filter = IntentFilter(TrackRecordingService.ACTION_STATE_CHANGED)
+        val filter = IntentFilter().apply {
+            addAction(TrackRecordingService.ACTION_STATE_CHANGED)
+            addAction(LocationBroadcastService.ACTION_STATE_CHANGED)
+        }
         ContextCompat.registerReceiver(this, recordingStateReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         isReceiverRegistered = true
     }
