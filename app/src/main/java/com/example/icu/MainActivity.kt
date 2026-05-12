@@ -58,8 +58,6 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.card.MaterialCardView
-import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.snackbar.Snackbar
@@ -69,7 +67,6 @@ import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import androidx.viewpager2.widget.ViewPager2
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.cachemanager.CacheManager
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -86,7 +83,6 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.Executors
-import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
     private lateinit var map: MapView
@@ -466,10 +462,6 @@ class MainActivity : AppCompatActivity() {
     private fun handleSectionBack() {
         if (currentSection == Section.AUTH && currentAuthStep == AuthStep.PASSWORD) {
             showAuthEmailScreen()
-            return
-        }
-        if (currentSection == Section.MAP_DOWNLOAD) {
-            showSettingsScreen()
             return
         }
         hideKeyboard()
@@ -1223,7 +1215,6 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
             addView(settingsRow())
-            addView(downloadVisibleMapAreaRow())
             addView(View(this@MainActivity), LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
@@ -1246,245 +1237,6 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         })
-    }
-
-    private fun downloadVisibleMapAreaRow(): View {
-        return MaterialCardView(this).apply {
-            radius = dp(8).toFloat()
-            cardElevation = 0f
-            strokeWidth = 0
-            setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.white))
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { showMapTileDownloadScreen() }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(10)
-            }
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(16), dp(14), dp(16), dp(14))
-                addView(TextView(this@MainActivity).apply {
-                    text = getString(R.string.download_visible_map_area)
-                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
-                    textSize = 17f
-                    typeface = Typeface.DEFAULT_BOLD
-                })
-                addView(TextView(this@MainActivity).apply {
-                    text = getString(R.string.download_visible_map_area_caption)
-                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
-                    textSize = 13f
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply {
-                        topMargin = dp(4)
-                    }
-                })
-            })
-        }
-    }
-
-    private fun showMapTileDownloadScreen() {
-        currentSection = Section.MAP_DOWNLOAD
-        showSection(getString(R.string.download_map_area_title))
-        setSectionContentPadding(horizontalDp = 20)
-
-        val boundingBox = map.boundingBox
-        val options = mapTileDownloadOptions(boundingBox)
-        val currentDownloadZoom = map.zoomLevelDouble.roundToInt().coerceIn(
-            map.minZoomLevel.toInt(),
-            map.maxZoomLevel.toInt()
-        )
-        val selectedZooms = options
-            .filter { it.zoom == currentDownloadZoom }
-            .map { it.zoom }
-            .toMutableSet()
-        if (selectedZooms.isEmpty()) {
-            selectedZooms.add(options.firstOrNull { it.zoom == currentDownloadZoom }?.zoom ?: options.first().zoom)
-        }
-
-        sectionContent.addView(TextView(this).apply {
-            text = getString(R.string.download_map_area_hint)
-            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
-            textSize = 14f
-            setLineSpacing(dp(2).toFloat(), 1.0f)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(14)
-            }
-        })
-
-        options.forEach { option ->
-            sectionContent.addView(mapTileZoomCard(option, selectedZooms))
-        }
-
-        sectionContent.addView(primaryFullWidthButton(getString(R.string.download_selected_scales)) {
-            startMapTileDownload(boundingBox, selectedZooms.toList().sorted())
-        }.apply {
-            (layoutParams as? LinearLayout.LayoutParams)?.topMargin = dp(14)
-        })
-    }
-
-    private fun mapTileDownloadOptions(boundingBox: org.osmdroid.util.BoundingBox): List<MapTileDownloadOption> {
-        val currentZoom = map.zoomLevelDouble.roundToInt()
-        val minZoom = map.minZoomLevel.toInt()
-        val maxZoom = map.maxZoomLevel.toInt()
-        return ((currentZoom - 1)..(currentZoom + 3))
-            .map { it.coerceIn(minZoom, maxZoom) }
-            .distinct()
-            .map { zoom ->
-                val tileCount = runCatching {
-                    CacheManager.getTilesCoverage(boundingBox, zoom).size
-                }.getOrDefault(0)
-                MapTileDownloadOption(
-                    zoom = zoom,
-                    tileCount = tileCount,
-                    estimatedBytes = tileCount.toLong() * ESTIMATED_OSM_TILE_BYTES
-                )
-            }
-    }
-
-    private fun mapTileZoomCard(
-        option: MapTileDownloadOption,
-        selectedZooms: MutableSet<Int>
-    ): View {
-        val checkbox = MaterialCheckBox(this).apply {
-            isChecked = option.zoom in selectedZooms
-            isClickable = false
-        }
-        return MaterialCardView(this).apply {
-            radius = dp(8).toFloat()
-            cardElevation = 0f
-            strokeWidth = dp(1)
-            strokeColor = ContextCompat.getColor(this@MainActivity, R.color.icu_sheet_divider)
-            setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.white))
-            isClickable = true
-            isFocusable = true
-            setOnClickListener {
-                if (option.zoom in selectedZooms) {
-                    selectedZooms.remove(option.zoom)
-                    checkbox.isChecked = false
-                } else {
-                    selectedZooms.add(option.zoom)
-                    checkbox.isChecked = true
-                }
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(8)
-            }
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(14), dp(10), dp(10), dp(10))
-                addView(LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    addView(TextView(this@MainActivity).apply {
-                        text = getString(R.string.map_zoom_label, option.zoom)
-                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
-                        textSize = 16f
-                        typeface = Typeface.DEFAULT_BOLD
-                    })
-                    addView(TextView(this@MainActivity).apply {
-                        text = getString(
-                            R.string.map_zoom_download_size,
-                            formatBytes(option.estimatedBytes),
-                            option.tileCount
-                        )
-                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
-                        textSize = 13f
-                        layoutParams = LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT
-                        ).apply {
-                            topMargin = dp(2)
-                        }
-                    })
-                })
-                addView(checkbox, LinearLayout.LayoutParams(dp(48), dp(48)))
-            })
-        }
-    }
-
-    private fun startMapTileDownload(
-        boundingBox: org.osmdroid.util.BoundingBox,
-        selectedZooms: List<Int>
-    ) {
-        if (selectedZooms.isEmpty()) {
-            showSnackbar(getString(R.string.select_at_least_one_scale))
-            return
-        }
-        val tileCount = selectedZooms.sumOf { zoom ->
-            runCatching { CacheManager.getTilesCoverage(boundingBox, zoom).size }.getOrDefault(0)
-        }
-        val ranges = selectedZooms.toConsecutiveRanges()
-        val completedRanges = java.util.concurrent.atomic.AtomicInteger(0)
-        val failedRanges = java.util.concurrent.atomic.AtomicInteger(0)
-        val totalRanges = ranges.size
-
-        runCatching {
-            val cacheManager = CacheManager(map)
-            ranges.forEach { range ->
-                cacheManager.downloadAreaAsyncNoUI(
-                    this,
-                    boundingBox,
-                    range.first,
-                    range.last,
-                    object : CacheManager.CacheManagerCallback {
-                        override fun onTaskComplete() {
-                            runOnUiThread {
-                                if (completedRanges.incrementAndGet() + failedRanges.get() == totalRanges) {
-                                    showSnackbar(getString(R.string.map_area_download_complete), isLong = true)
-                                }
-                            }
-                        }
-
-                        override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) = Unit
-
-                        override fun downloadStarted() = Unit
-
-                        override fun setPossibleTilesInArea(total: Int) = Unit
-
-                        override fun onTaskFailed(errors: Int) {
-                            runOnUiThread {
-                                if (failedRanges.incrementAndGet() + completedRanges.get() == totalRanges) {
-                                    showSnackbar(getString(R.string.map_area_download_failed), isLong = true)
-                                }
-                            }
-                        }
-                    }
-                )
-            }
-            showSnackbar(getString(R.string.map_area_download_started, tileCount), isLong = true)
-        }.onFailure { error ->
-            showSnackbar(getString(R.string.map_area_download_error, userMessage(error)), isLong = true)
-        }
-    }
-
-    private fun List<Int>.toConsecutiveRanges(): List<IntRange> {
-        if (isEmpty()) return emptyList()
-        val ranges = mutableListOf<IntRange>()
-        var start = first()
-        var previous = first()
-        drop(1).forEach { value ->
-            if (value == previous + 1) {
-                previous = value
-            } else {
-                ranges.add(start..previous)
-                start = value
-                previous = value
-            }
-        }
-        ranges.add(start..previous)
-        return ranges
     }
 
     private fun showChangelogSheet() {
@@ -2148,7 +1900,7 @@ class MainActivity : AppCompatActivity() {
         sectionContent.removeAllViews()
         authRootView = null
         findViewById<MaterialButton>(R.id.closeSectionButton).visibility =
-            if (currentSection == Section.AUTH || currentSection == Section.MAP_DOWNLOAD) View.VISIBLE else View.INVISIBLE
+            if (currentSection == Section.AUTH) View.VISIBLE else View.INVISIBLE
         sectionPanel.visibility = View.VISIBLE
         addTrackFab.visibility = View.GONE
         myLocationButton.visibility = View.GONE
@@ -3317,17 +3069,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun formatBytes(bytes: Long): String {
-        val locale = Locale.forLanguageTag("ru-RU")
-        val kilobytes = bytes / 1024.0
-        val megabytes = kilobytes / 1024.0
-        return if (megabytes >= 1.0) {
-            String.format(locale, "%.1f МБ", megabytes)
-        } else {
-            String.format(locale, "%.0f КБ", kilobytes)
-        }
-    }
-
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
     }
@@ -3342,18 +3083,11 @@ class MainActivity : AppCompatActivity() {
         val accentColor: Int
     )
 
-    private data class MapTileDownloadOption(
-        val zoom: Int,
-        val tileCount: Int,
-        val estimatedBytes: Long
-    )
-
     private enum class Section {
         NONE,
         TRACKS,
         STATISTICS,
         SETTINGS,
-        MAP_DOWNLOAD,
         PROFILE,
         AUTH
     }
@@ -3408,6 +3142,5 @@ class MainActivity : AppCompatActivity() {
         private const val FRIEND_TOOLTIP_DELAY_MS = 80L
         private const val TRACK_SAVED_SNACKBAR_MS = 10_000
         private const val CHANGELOG_ASSET_NAME = "CHANGELOG.md"
-        private const val ESTIMATED_OSM_TILE_BYTES = 25L * 1024L
     }
 }
