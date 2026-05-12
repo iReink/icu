@@ -91,7 +91,7 @@ class LocationBroadcastService : Service() {
             endsAtMillis = durationMs?.let { now + it }
         )
         saveState(this, currentState)
-        lastGoodPoint = null
+        lastGoodPoint = loadLastPoint(this)
         lastUploadMillis = 0L
 
         startAsForeground()
@@ -109,6 +109,7 @@ class LocationBroadcastService : Service() {
             stopBroadcast()
             return
         }
+        lastGoodPoint = lastGoodPoint ?: loadLastPoint(this)
         startAsForeground()
         requestLocationUpdates(provider)
         scheduleStopIfNeeded()
@@ -156,17 +157,16 @@ class LocationBroadcastService : Service() {
         val now = System.currentTimeMillis()
         if (now - lastUploadMillis < LIVE_LOCATION_BROADCAST_INTERVAL_MS) return
 
-        val candidate = if (TrackRecordingService.isUsableLocation(location)) {
-            location.toSharePoint()
-        } else {
-            null
-        }
+        val rawPoint = location.toSharePoint()
+        val candidate = if (TrackRecordingService.isUsableLocation(location) || isLargeMoveDespitePoorAccuracy(rawPoint)) {
+            rawPoint
+        } else null
 
         val pointToUpload = when {
             candidate == null -> lastGoodPoint?.copy(recordedAtMillis = now)
-            lastGoodPoint == null -> candidate.copy(recordedAtMillis = now).also { lastGoodPoint = candidate }
+            lastGoodPoint == null -> candidate.copy(recordedAtMillis = now).also { rememberLastGoodPoint(it) }
             distanceMeters(lastGoodPoint!!, candidate) >= BROADCAST_NOISE_THRESHOLD_METERS -> {
-                candidate.copy(recordedAtMillis = now).also { lastGoodPoint = candidate }
+                candidate.copy(recordedAtMillis = now).also { rememberLastGoodPoint(it) }
             }
             else -> lastGoodPoint?.copy(recordedAtMillis = now)
         } ?: return
@@ -176,6 +176,18 @@ class LocationBroadcastService : Service() {
             liveLocationUploader.enqueueAndFlush(pointToUpload)
         }.start()
         updateNotification()
+    }
+
+    private fun isLargeMoveDespitePoorAccuracy(point: LocationSharePoint): Boolean {
+        val accuracy = point.accuracyMeters ?: return false
+        if (accuracy <= TrackRecordingService.MAX_ACCEPTED_ACCURACY_METERS) return true
+        val previous = lastGoodPoint ?: return false
+        return distanceMeters(previous, point) > accuracy * INACCURATE_LOCATION_DISTANCE_MULTIPLIER
+    }
+
+    private fun rememberLastGoodPoint(point: LocationSharePoint) {
+        lastGoodPoint = point
+        saveLastPoint(this, point)
     }
 
     private fun isExpired(): Boolean {
@@ -321,6 +333,7 @@ class LocationBroadcastService : Service() {
         const val EXTRA_DURATION_MS = "duration_ms"
         const val LIVE_LOCATION_BROADCAST_INTERVAL_MS = 15_000L
         const val BROADCAST_NOISE_THRESHOLD_METERS = 5f
+        const val INACCURATE_LOCATION_DISTANCE_MULTIPLIER = 3f
 
         private const val CHANNEL_ID = "location_broadcast"
         private const val NOTIFICATION_ID = 1002
@@ -329,7 +342,14 @@ class LocationBroadcastService : Service() {
         private const val KEY_ACTIVE = "active"
         private const val KEY_STARTED_AT = "started_at"
         private const val KEY_ENDS_AT = "ends_at"
+        private const val KEY_LAST_LATITUDE = "last_latitude"
+        private const val KEY_LAST_LONGITUDE = "last_longitude"
+        private const val KEY_LAST_ALTITUDE = "last_altitude"
+        private const val KEY_LAST_ACCURACY = "last_accuracy"
+        private const val KEY_LAST_RECORDED_AT = "last_recorded_at"
         private const val NO_END = -1L
+        private const val NO_DOUBLE = Double.NaN
+        private const val NO_FLOAT = Float.NaN
 
         @Volatile
         var currentState: LocationBroadcastState = LocationBroadcastState()
@@ -372,6 +392,30 @@ class LocationBroadcastService : Service() {
                 .putBoolean(KEY_ACTIVE, state.isActive)
                 .putLong(KEY_STARTED_AT, state.startedAtMillis)
                 .putLong(KEY_ENDS_AT, state.endsAtMillis ?: NO_END)
+                .apply()
+        }
+
+        private fun loadLastPoint(context: Context): LocationSharePoint? {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (!prefs.contains(KEY_LAST_LATITUDE) || !prefs.contains(KEY_LAST_LONGITUDE)) return null
+            val altitude = prefs.getFloat(KEY_LAST_ALTITUDE, NO_FLOAT).takeIf { !it.isNaN() }?.toDouble()
+            val accuracy = prefs.getFloat(KEY_LAST_ACCURACY, NO_FLOAT).takeIf { !it.isNaN() }
+            return LocationSharePoint(
+                latitude = Double.fromBits(prefs.getLong(KEY_LAST_LATITUDE, NO_DOUBLE.toBits())),
+                longitude = Double.fromBits(prefs.getLong(KEY_LAST_LONGITUDE, NO_DOUBLE.toBits())),
+                altitude = altitude,
+                accuracyMeters = accuracy,
+                recordedAtMillis = prefs.getLong(KEY_LAST_RECORDED_AT, 0L)
+            )
+        }
+
+        private fun saveLastPoint(context: Context, point: LocationSharePoint) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putLong(KEY_LAST_LATITUDE, point.latitude.toBits())
+                .putLong(KEY_LAST_LONGITUDE, point.longitude.toBits())
+                .putFloat(KEY_LAST_ALTITUDE, point.altitude?.toFloat() ?: NO_FLOAT)
+                .putFloat(KEY_LAST_ACCURACY, point.accuracyMeters ?: NO_FLOAT)
+                .putLong(KEY_LAST_RECORDED_AT, point.recordedAtMillis)
                 .apply()
         }
     }
