@@ -66,12 +66,14 @@ import com.google.android.material.tabs.TabLayoutMediator
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import androidx.viewpager2.widget.ViewPager2
+import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
@@ -92,6 +94,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var addTrackFab: FloatingActionButton
     private lateinit var myLocationButton: FloatingActionButton
     private lateinit var bottomNavigation: BottomNavigationView
+    private lateinit var reticleView: ReticleView
     private lateinit var sectionPanel: LinearLayout
     private lateinit var sectionTitle: TextView
     private lateinit var sectionContent: LinearLayout
@@ -112,6 +115,7 @@ class MainActivity : AppCompatActivity() {
     private var highlightedFriendshipId: String? = null
     private var savedTrackOverlays = mutableListOf<Polyline>()
     private var friendLocationOverlays = mutableListOf<Overlay>()
+    private var destinationMarker: Marker? = null
     private var activeTrackPolyline: Polyline? = null
     private var isReceiverRegistered = false
     private var shouldFollowLocation = true
@@ -286,6 +290,7 @@ class MainActivity : AppCompatActivity() {
         addTrackFab = findViewById(R.id.addTrackFab)
         myLocationButton = findViewById(R.id.myLocationButton)
         bottomNavigation = findViewById(R.id.bottomNavigation)
+        reticleView = findViewById(R.id.reticleView)
         sectionPanel = findViewById(R.id.sectionPanel)
         sectionTitle = findViewById(R.id.sectionTitle)
         sectionContent = findViewById(R.id.sectionContent)
@@ -407,6 +412,14 @@ class MainActivity : AppCompatActivity() {
             }
             false
         }
+        map.overlays.add(MapEventsOverlay(this, object : MapEventsReceiver {
+            override fun singleTapConfirmedHelper(point: GeoPoint): Boolean = false
+
+            override fun longPressHelper(point: GeoPoint): Boolean {
+                showDestinationPreviewSheet(point)
+                return true
+            }
+        }))
     }
 
     private fun setupBottomNavigation() {
@@ -1081,6 +1094,7 @@ class MainActivity : AppCompatActivity() {
         recordingPanel.visibility = if (isRecording && !isSectionVisible) View.VISIBLE else View.GONE
         addTrackFab.visibility = if (!isRecording && !isSectionVisible) View.VISIBLE else View.GONE
         myLocationButton.visibility = if (!isSectionVisible) View.VISIBLE else View.GONE
+        reticleView.visibility = if (!isSectionVisible) View.VISIBLE else View.GONE
 
         if (isRecording) {
             updateRecordingPanelTime()
@@ -1145,7 +1159,170 @@ class MainActivity : AppCompatActivity() {
             outlinePaint.color = type.color
             outlinePaint.strokeWidth = TRACK_STROKE_WIDTH
             outlinePaint.isAntiAlias = true
+            setOnClickListener { _, _, _ -> true }
         }
+    }
+
+    private fun showDestinationPreviewSheet(point: GeoPoint) {
+        showDestinationSheet(
+            title = getString(R.string.destination_preview_title),
+            point = point,
+            primaryText = getString(R.string.place_destination_marker),
+            onPrimary = { setDestinationMarker(point) },
+            destructiveText = null,
+            onDestructive = null
+        )
+    }
+
+    private fun showDestinationDetailsSheet(point: GeoPoint) {
+        showDestinationSheet(
+            title = getString(R.string.destination_title),
+            point = point,
+            primaryText = null,
+            onPrimary = null,
+            destructiveText = getString(R.string.delete_destination),
+            onDestructive = ::clearDestinationMarker
+        )
+    }
+
+    private fun showDestinationSheet(
+        title: String,
+        point: GeoPoint,
+        primaryText: String?,
+        onPrimary: (() -> Unit)?,
+        destructiveText: String?,
+        onDestructive: (() -> Unit)?
+    ) {
+        val sheet = BottomSheetDialog(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_bottom_sheet)
+            setPadding(dp(20), dp(14), dp(20), dp(28))
+            addView(View(this@MainActivity).apply {
+                setBackgroundResource(R.drawable.bg_sheet_handle)
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(6)).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    bottomMargin = dp(32)
+                }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 28f
+                typeface = Typeface.DEFAULT
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.destination_distance, distanceToPoint(point))
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                textSize = 16f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dp(12)
+                    bottomMargin = dp(18)
+                }
+            })
+            if (primaryText != null && onPrimary != null) {
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = primaryText
+                    isAllCaps = false
+                    setOnClickListener {
+                        sheet.dismiss()
+                        onPrimary()
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(52)
+                    )
+                })
+            }
+            if (destructiveText != null && onDestructive != null) {
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = destructiveText
+                    isAllCaps = false
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_danger))
+                    elevation = 0f
+                    stateListAnimator = null
+                    setOnClickListener {
+                        sheet.dismiss()
+                        onDestructive()
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(52)
+                    ).apply { topMargin = dp(6) }
+                })
+            }
+        }
+        sheet.setContentView(content)
+        sheet.setOnShowListener { dialog ->
+            val bottomSheet = (dialog as BottomSheetDialog)
+                .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+            bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
+        }
+        sheet.show()
+    }
+
+    private fun setDestinationMarker(point: GeoPoint) {
+        clearDestinationMarker()
+        val marker = Marker(map).apply {
+            position = point
+            icon = BitmapDrawable(resources, createDestinationFlagIcon())
+            setAnchor(0.18f, 1f)
+            setOnMarkerClickListener { _, _ ->
+                showDestinationDetailsSheet(point)
+                true
+            }
+        }
+        destinationMarker = marker
+        map.overlays.add(marker)
+        map.invalidate()
+    }
+
+    private fun clearDestinationMarker() {
+        destinationMarker?.let { map.overlays.remove(it) }
+        destinationMarker = null
+        map.invalidate()
+    }
+
+    private fun createDestinationFlagIcon(): Bitmap {
+        val width = dp(34)
+        val height = dp(42)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val poleX = dp(7).toFloat()
+        val top = dp(4).toFloat()
+        val bottom = dp(38).toFloat()
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = dp(2).toFloat()
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.color = Color.rgb(60, 47, 47)
+        canvas.drawLine(poleX, top, poleX, bottom, paint)
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.rgb(214, 38, 42)
+        val flag = android.graphics.Path().apply {
+            moveTo(poleX, top)
+            lineTo(width - dp(4).toFloat(), top + dp(4))
+            lineTo(poleX, top + dp(15))
+            close()
+        }
+        canvas.drawPath(flag, paint)
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(48, 0, 0, 0)
+        canvas.drawOval(
+            poleX - dp(4),
+            bottom - dp(1),
+            poleX + dp(12),
+            bottom + dp(4),
+            paint
+        )
+        return bitmap
     }
 
     private fun showTracksScreen() {
@@ -2890,6 +3067,32 @@ class MainActivity : AppCompatActivity() {
             "${result[0].toInt()} м"
         } else {
             String.format(Locale.forLanguageTag("ru-RU"), "%.1f км", result[0] / 1000f)
+        }
+    }
+
+    private fun distanceToPoint(point: GeoPoint): String {
+        val current = lastKnownUserLocation ?: locationOverlay?.myLocation?.let {
+            Location("map").apply {
+                latitude = it.latitude
+                longitude = it.longitude
+            }
+        } ?: return "-"
+        val result = FloatArray(1)
+        Location.distanceBetween(
+            current.latitude,
+            current.longitude,
+            point.latitude,
+            point.longitude,
+            result
+        )
+        return formatMapDistance(result[0])
+    }
+
+    private fun formatMapDistance(meters: Float): String {
+        return if (meters < 1000f) {
+            "${meters.toInt()} м"
+        } else {
+            String.format(Locale.forLanguageTag("ru-RU"), "%.1f км", meters / 1000f)
         }
     }
 

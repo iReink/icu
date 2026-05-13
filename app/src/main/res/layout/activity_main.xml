@@ -18,6 +18,14 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
+        <com.example.icu.ReticleView
+            android:id="@+id/reticleView"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:layout_gravity="center"
+            android:importantForAccessibility="no"
+            android:visibility="visible" />
+
         <LinearLayout
             android:id="@+id/recordingPanel"
             android:layout_width="match_parent"

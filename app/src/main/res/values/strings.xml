@@ -6,6 +6,11 @@
     <string name="bike">Велосипед</string>
     <string name="upload">Загрузить</string>
     <string name="finish_recording">Стоп</string>
+    <string name="destination_preview_title">Точка на карте</string>
+    <string name="destination_title">Точка назначения</string>
+    <string name="destination_distance">Расстояние: %1$s</string>
+    <string name="place_destination_marker">Поставить метку</string>
+    <string name="delete_destination">Удалить точку</string>
     <string name="zero_distance">0,00 км</string>
     <string name="zero_duration">00:00</string>
     <string name="menu">Меню</string>
