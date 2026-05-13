@@ -416,7 +416,7 @@ class MainActivity : AppCompatActivity() {
             override fun singleTapConfirmedHelper(point: GeoPoint): Boolean = false
 
             override fun longPressHelper(point: GeoPoint): Boolean {
-                showDestinationPreviewSheet(point)
+                showDestinationPreviewSheet(reticleTargetPoint())
                 return true
             }
         }))
@@ -1172,6 +1172,11 @@ class MainActivity : AppCompatActivity() {
             destructiveText = null,
             onDestructive = null
         )
+    }
+
+    private fun reticleTargetPoint(): GeoPoint {
+        val center = map.mapCenter
+        return GeoPoint(center.latitude, center.longitude)
     }
 
     private fun showDestinationDetailsSheet(point: GeoPoint) {

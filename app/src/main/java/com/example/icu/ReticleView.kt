@@ -18,7 +18,7 @@ class ReticleView @JvmOverloads constructor(
         val centerX = width / 2f
         val centerY = height / 2f
         val density = resources.displayMetrics.density
-        val radius = 22f * density
+        val radius = 11f * density
         val gap = 6f * density
 
         paint.style = Paint.Style.STROKE
