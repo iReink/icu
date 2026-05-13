@@ -89,6 +89,7 @@
     <string name="location_broadcast_4_hours">4 часа</string>
     <string name="location_broadcast_8_hours">8 часов</string>
     <string name="location_broadcast_until_manual_option">До ручного отключения</string>
+    <string name="location_broadcast_enable">Включить</string>
     <string name="location_broadcast_active_time">Трансляция активна ещё %1$s</string>
     <string name="location_broadcast_active_manual">Трансляция активна до ручного отключения</string>
     <string name="location_broadcast_stop_title">Остановить трансляцию?</string>

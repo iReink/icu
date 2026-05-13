@@ -43,6 +43,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
@@ -60,6 +61,7 @@ import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
+import com.google.android.material.radiobutton.MaterialRadioButton
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
@@ -1728,6 +1730,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun showLocationBroadcastDurationSheet() {
         val sheet = BottomSheetDialog(this)
+        val options = locationBroadcastOptions()
+        var selectedDurationMs = options.first().second
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundResource(R.drawable.bg_bottom_sheet)
@@ -1751,12 +1755,77 @@ class MainActivity : AppCompatActivity() {
                     bottomMargin = dp(18)
                 }
             })
-            locationBroadcastOptions().forEach { option ->
-                addView(locationBroadcastOptionButton(option.first) {
-                    sheet.dismiss()
-                    requestStartLocationBroadcast(option.second)
-                })
+            val radioGroup = RadioGroup(this@MainActivity).apply {
+                orientation = RadioGroup.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dp(18)
+                }
             }
+            options.forEachIndexed { index, option ->
+                val radioButton = MaterialRadioButton(this@MainActivity).apply {
+                    id = View.generateViewId()
+                    text = option.first
+                    textSize = 16f
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                    gravity = Gravity.CENTER_VERTICAL
+                    minHeight = dp(48)
+                    setPadding(0, 0, 0, 0)
+                    layoutParams = RadioGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(48)
+                    )
+                }
+                radioButton.setOnClickListener {
+                    selectedDurationMs = option.second
+                }
+                radioGroup.addView(radioButton)
+                if (index == 0) {
+                    radioGroup.check(radioButton.id)
+                }
+            }
+            radioGroup.setOnCheckedChangeListener { group, checkedId ->
+                val checkedIndex = (0 until group.childCount).indexOfFirst { index ->
+                    group.getChildAt(index).id == checkedId
+                }
+                selectedDurationMs = options.getOrNull(checkedIndex)?.second
+            }
+            addView(radioGroup)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = getString(R.string.cancel)
+                    isAllCaps = false
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                    elevation = 0f
+                    stateListAnimator = null
+                    setOnClickListener { sheet.dismiss() }
+                    layoutParams = LinearLayout.LayoutParams(
+                        0,
+                        dp(48),
+                        1f
+                    ).apply {
+                        marginEnd = dp(8)
+                    }
+                })
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = getString(R.string.location_broadcast_enable)
+                    isAllCaps = false
+                    setOnClickListener {
+                        sheet.dismiss()
+                        requestStartLocationBroadcast(selectedDurationMs)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        0,
+                        dp(48),
+                        1f
+                    )
+                })
+            })
         }
         sheet.setContentView(content)
         sheet.setOnShowListener { dialog ->
@@ -1775,25 +1844,6 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.location_broadcast_8_hours) to 8 * 60 * 60_000L,
             getString(R.string.location_broadcast_until_manual_option) to null
         )
-    }
-
-    private fun locationBroadcastOptionButton(textValue: String, onClick: () -> Unit): View {
-        return MaterialButton(this).apply {
-            text = textValue
-            isAllCaps = false
-            textSize = 16f
-            gravity = Gravity.CENTER_VERTICAL
-            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
-            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_surface)
-            cornerRadius = dp(8)
-            setOnClickListener { onClick() }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(52)
-            ).apply {
-                bottomMargin = dp(8)
-            }
-        }
     }
 
     private fun requestStartLocationBroadcast(durationMs: Long?) {
