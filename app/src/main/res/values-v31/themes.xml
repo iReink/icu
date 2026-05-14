@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.ICU.Launcher" parent="Theme.ICU">
+        <item name="android:windowSplashScreenBackground">@color/icu_launcher_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/icu_app_icon</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/icu_launcher_background</item>
+        <item name="android:windowBackground">@drawable/launch_splash_background</item>
+        <item name="android:statusBarColor">@color/icu_launcher_background</item>
+        <item name="android:navigationBarColor">@color/icu_launcher_background</item>
+    </style>
+</resources>

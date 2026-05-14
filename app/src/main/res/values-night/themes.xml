@@ -13,4 +13,10 @@
         <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
         <!-- Customize your theme here. -->
     </style>
+
+    <style name="Theme.ICU.Launcher" parent="Theme.ICU">
+        <item name="android:windowBackground">@drawable/launch_splash_background</item>
+        <item name="android:statusBarColor">@color/icu_launcher_background</item>
+        <item name="android:navigationBarColor">@color/icu_launcher_background</item>
+    </style>
 </resources>
