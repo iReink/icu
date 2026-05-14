@@ -317,36 +317,6 @@ class MainActivity : AppCompatActivity() {
             ViewGroup.LayoutParams.MATCH_PARENT
         ))
 
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            alpha = 0f
-            translationY = dp(12).toFloat()
-        }
-        content.addView(TextView(this).apply {
-            text = getString(R.string.app_name)
-            gravity = Gravity.CENTER
-            setTextColor(Color.rgb(20, 94, 48))
-            textSize = 52f
-            typeface = Typeface.DEFAULT_BOLD
-            letterSpacing = 0.08f
-        }, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply {
-            bottomMargin = dp(28)
-        })
-        content.addView(ImageView(this).apply {
-            setImageResource(R.drawable.icu_app_icon)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            elevation = dp(10).toFloat()
-        }, LinearLayout.LayoutParams(dp(148), dp(148)))
-
-        overlay.addView(content, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        ))
-
         addContentView(overlay, ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
@@ -356,12 +326,6 @@ class MainActivity : AppCompatActivity() {
             .scaleX(1.07f)
             .scaleY(1.07f)
             .setDuration(SPLASH_DURATION_MS)
-            .start()
-        content.animate()
-            .alpha(1f)
-            .translationY(0f)
-            .setStartDelay(120L)
-            .setDuration(420L)
             .start()
         overlay.postDelayed({
             overlay.animate()
