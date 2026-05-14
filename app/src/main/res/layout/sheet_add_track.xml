@@ -25,46 +25,32 @@
         android:textColor="@color/black"
         android:textSize="28sp" />
 
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/walkTrackButton"
-        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+    <RadioGroup
+        android:id="@+id/addTrackTypeGroup"
         android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:text="@string/walk"
-        android:textAllCaps="false"
-        android:textColor="@color/icu_text_primary"
-        android:letterSpacing="0"
-        android:textSize="16sp"
-        app:backgroundTint="@color/icu_purple_surface"
-        app:cornerRadius="10dp"
-        app:icon="@drawable/ic_walk"
-        app:iconGravity="textStart"
-        app:iconPadding="12dp"
-        app:iconSize="26dp"
-        app:iconTint="@color/icu_text_primary"
-        app:strokeColor="@color/black"
-        app:strokeWidth="2dp" />
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="4dp"
+        android:orientation="vertical">
 
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/bikeTrackButton"
-        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-        android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:layout_marginTop="16dp"
-        android:text="@string/bike"
-        android:textAllCaps="false"
-        android:textColor="@color/icu_text_primary"
-        android:letterSpacing="0"
-        android:textSize="16sp"
-        app:backgroundTint="@color/icu_purple_surface"
-        app:cornerRadius="10dp"
-        app:icon="@drawable/ic_bike"
-        app:iconGravity="textStart"
-        app:iconPadding="12dp"
-        app:iconSize="26dp"
-        app:iconTint="@color/icu_text_primary"
-        app:strokeColor="@color/icu_blue_track"
-        app:strokeWidth="2dp" />
+        <com.google.android.material.radiobutton.MaterialRadioButton
+            android:id="@+id/walkTrackRadio"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:checked="true"
+            android:gravity="center_vertical"
+            android:text="@string/walk"
+            android:textColor="@color/icu_text_primary"
+            android:textSize="16sp" />
+
+        <com.google.android.material.radiobutton.MaterialRadioButton
+            android:id="@+id/bikeTrackRadio"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:gravity="center_vertical"
+            android:text="@string/bike"
+            android:textColor="@color/icu_text_primary"
+            android:textSize="16sp" />
+    </RadioGroup>
 
     <View
         android:layout_width="match_parent"
@@ -90,4 +76,32 @@
         app:iconPadding="12dp"
         app:iconSize="26dp"
         app:iconTint="@color/icu_text_primary" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:gravity="center_vertical|end"
+        android:orientation="horizontal">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/cancelAddTrackButton"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_marginEnd="8dp"
+            android:layout_weight="1"
+            android:text="@string/cancel"
+            android:textAllCaps="false"
+            android:textColor="@color/icu_purple_ink" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/startTrackButton"
+            style="@style/Widget.MaterialComponents.Button"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="@string/start_recording"
+            android:textAllCaps="false" />
+    </LinearLayout>
 </LinearLayout>

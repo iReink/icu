@@ -322,7 +322,19 @@ class SupabaseApiClient(
             url = "${SupabaseConfig.PROJECT_URL}/rest/v1/location_points?select=*&user_id=eq.$friendId&recorded_at=gte.$since&order=recorded_at.asc",
             headers = authHeaders(session)
         )
-        val array = JSONArray(response.text)
+        val points = parseLocationSharePoints(response.text)
+        if (points.isNotEmpty()) return points
+
+        val latestResponse = request(
+            method = "GET",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/location_points?select=*&user_id=eq.$friendId&order=recorded_at.desc&limit=1",
+            headers = authHeaders(session)
+        )
+        return parseLocationSharePoints(latestResponse.text)
+    }
+
+    private fun parseLocationSharePoints(responseText: String): List<LocationSharePoint> {
+        val array = JSONArray(responseText)
         return (0 until array.length()).map { index ->
             val item = array.getJSONObject(index)
             LocationSharePoint(
@@ -332,7 +344,7 @@ class SupabaseApiClient(
                 accuracyMeters = item.optDoubleOrNull("accuracy_meters")?.toFloat(),
                 recordedAtMillis = Instant.parse(item.getString("recorded_at")).toEpochMilli()
             )
-        }
+        }.sortedBy { it.recordedAtMillis }
     }
 
     private fun parseSession(json: JSONObject, fallbackEmail: String?): SupabaseSession {

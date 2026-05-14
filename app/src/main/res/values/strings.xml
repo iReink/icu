@@ -5,6 +5,7 @@
     <string name="walk">Пешком</string>
     <string name="bike">Велосипед</string>
     <string name="upload">Загрузить</string>
+    <string name="start_recording">Начать</string>
     <string name="finish_recording">Стоп</string>
     <string name="destination_preview_title">Точка на карте</string>
     <string name="destination_title">Точка назначения</string>

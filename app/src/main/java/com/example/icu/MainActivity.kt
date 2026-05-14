@@ -1022,13 +1022,16 @@ class MainActivity : AppCompatActivity() {
             bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
         }
 
-        content.findViewById<MaterialButton>(R.id.walkTrackButton).setOnClickListener {
+        content.findViewById<MaterialButton>(R.id.cancelAddTrackButton).setOnClickListener {
             sheet.dismiss()
-            requestStartRecording(TrackType.WALK)
         }
-        content.findViewById<MaterialButton>(R.id.bikeTrackButton).setOnClickListener {
+        content.findViewById<MaterialButton>(R.id.startTrackButton).setOnClickListener {
+            val selectedType = when (content.findViewById<RadioGroup>(R.id.addTrackTypeGroup).checkedRadioButtonId) {
+                R.id.bikeTrackRadio -> TrackType.BIKE
+                else -> TrackType.WALK
+            }
             sheet.dismiss()
-            requestStartRecording(TrackType.BIKE)
+            requestStartRecording(selectedType)
         }
         content.findViewById<MaterialButton>(R.id.uploadTrackButton).setOnClickListener {
             showSnackbar(getString(R.string.gpx_upload_mock))
@@ -2502,7 +2505,7 @@ class MainActivity : AppCompatActivity() {
                             ContextCompat.getColor(this@MainActivity, R.color.icu_sheet_divider)
                         }
                     )
-                    layoutParams = LinearLayout.LayoutParams(0, dp(26), 1f)
+                    layoutParams = LinearLayout.LayoutParams(0, dp(30), 1f)
                 })
             }
             card.addView(row)
