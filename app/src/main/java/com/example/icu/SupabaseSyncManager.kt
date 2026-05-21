@@ -6,18 +6,22 @@ class SupabaseSyncManager(
     private val apiClient: SupabaseApiClient
 ) {
     fun sync(): SyncResult {
-        val session = apiClient.activeSession()
+        var session = apiClient.activeSession()
         var uploaded = 0
         var downloaded = 0
         var deleted = 0
 
         metadataStore.deletedRemoteIds().forEach { remoteId ->
-            apiClient.markTrackDeleted(session, remoteId)
+            withFreshSession({ refreshed -> session = refreshed }) { activeSession ->
+                apiClient.markTrackDeleted(activeSession, remoteId)
+            }
             metadataStore.clearDeleted(remoteId)
             deleted += 1
         }
 
-        val remoteTracks = apiClient.fetchTracks(session)
+        val remoteTracks = withFreshSession({ refreshed -> session = refreshed }) { activeSession ->
+            apiClient.fetchTracks(activeSession)
+        }
         val localTracks = trackStore.loadTracks()
 
         localTracks
@@ -25,8 +29,10 @@ class SupabaseSyncManager(
             .forEach { track ->
                 val remoteId = metadataStore.ensureRemoteId(track.file)
                 val storagePath = metadataStore.storagePath(session.userId, track.file)
-                apiClient.uploadGpx(session, storagePath, track.file.readBytes())
-                apiClient.upsertTrack(session, track.toRemoteTrack(remoteId, session.userId, storagePath))
+                withFreshSession({ refreshed -> session = refreshed }) { activeSession ->
+                    apiClient.uploadGpx(activeSession, storagePath, track.file.readBytes())
+                    apiClient.upsertTrack(activeSession, track.toRemoteTrack(remoteId, activeSession.userId, storagePath))
+                }
                 metadataStore.markSynced(track, remoteId)
                 uploaded += 1
             }
@@ -35,7 +41,9 @@ class SupabaseSyncManager(
             .filterNot { metadataStore.hasRemoteId(it.id) }
             .filterNot { metadataStore.deletedRemoteIds().contains(it.id) }
             .forEach { remoteTrack ->
-                val gpxBytes = apiClient.downloadGpx(session, remoteTrack.storagePath)
+                val gpxBytes = withFreshSession({ refreshed -> session = refreshed }) { activeSession ->
+                    apiClient.downloadGpx(activeSession, remoteTrack.storagePath)
+                }
                 val importedTrack = trackStore.saveImportedGpx(
                     fileName = "track-cloud-${remoteTrack.id}.gpx",
                     gpxBytes = gpxBytes
@@ -75,6 +83,21 @@ class SupabaseSyncManager(
             visible = visible,
             updatedAtMillis = System.currentTimeMillis()
         )
+    }
+
+    private fun <T> withFreshSession(
+        onRefresh: (SupabaseSession) -> Unit,
+        block: (SupabaseSession) -> T
+    ): T {
+        val session = apiClient.activeSession()
+        return try {
+            block(session)
+        } catch (error: SupabaseException) {
+            if (error.statusCode != 401) throw error
+            val refreshed = apiClient.activeSession(forceRefresh = true)
+            onRefresh(refreshed)
+            block(refreshed)
+        }
     }
 }
 

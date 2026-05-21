@@ -70,9 +70,9 @@ class SupabaseApiClient(
         return session
     }
 
-    fun activeSession(): SupabaseSession {
+    fun activeSession(forceRefresh: Boolean = false): SupabaseSession {
         val session = sessionStore.current() ?: throw SupabaseException(401, "Not signed in")
-        if (session.expiresAtMillis - System.currentTimeMillis() > REFRESH_MARGIN_MILLIS) {
+        if (!forceRefresh && session.expiresAtMillis - System.currentTimeMillis() > REFRESH_MARGIN_MILLIS) {
             return session
         }
 

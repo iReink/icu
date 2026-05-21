@@ -129,6 +129,7 @@ class MainActivity : AppCompatActivity() {
     private var activeTrackPolyline: Polyline? = null
     private var measurementPolyline: Polyline? = null
     private val measurementPoints = mutableListOf<TrackPoint>()
+    private val measurementGeoPoints = mutableListOf<GeoPoint>()
     private var isMeasurementMode = false
     private var fixedMeasurementDistanceMeters = 0f
     private var isReceiverRegistered = false
@@ -149,6 +150,7 @@ class MainActivity : AppCompatActivity() {
     private var profileRefreshInFlight = false
     private var friendTooltip: PopupWindow? = null
     private var infoTooltip: PopupWindow? = null
+    private var savedTracksLoadRequest = 0
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
 
     private val foregroundLocationListener = LocationListener { location ->
@@ -234,7 +236,6 @@ class MainActivity : AppCompatActivity() {
         setupMap()
         setupBottomNavigation()
         setupActions()
-        loadSavedTracks()
         syncRecordingState()
         updateAuthHeader()
         handleAuthCallback(intent)
@@ -265,11 +266,13 @@ class MainActivity : AppCompatActivity() {
         if (shouldFollowLocation) {
             locationOverlay?.enableFollowLocation()
         }
-        loadSavedTracks()
+        loadSavedTracksAsync()
         syncRecordingState()
-        syncTracksSilently()
-        requestForegroundLiveLocationUpdates()
-        refreshFriendLocationsOnMap()
+        findViewById<View>(R.id.mainContent).postDelayed({
+            syncTracksSilently()
+            requestForegroundLiveLocationUpdates()
+            refreshFriendLocationsOnMap()
+        }, STARTUP_DEFER_MS)
         elapsedHandler.removeCallbacks(friendLocationRefreshTicker)
         elapsedHandler.postDelayed(friendLocationRefreshTicker, FRIEND_LOCATION_REFRESH_MS)
     }
@@ -932,7 +935,7 @@ class MainActivity : AppCompatActivity() {
             }.onSuccess { result ->
                 runOnUiThread {
                     updateAuthHeader()
-                    loadSavedTracks()
+                    loadSavedTracksAsync()
                     showTracksScreenIfVisible()
                     if (showToast) {
                         showSnackbar(
@@ -995,7 +998,7 @@ class MainActivity : AppCompatActivity() {
         ) {
             trackStore.setTrackVisibility(track, false)
             syncTracksSilently()
-            loadSavedTracks()
+            loadSavedTracksAsync()
             showTracksScreenIfVisible()
         }
     }
@@ -1120,8 +1123,8 @@ class MainActivity : AppCompatActivity() {
             elapsedHandler.removeCallbacks(elapsedTicker)
             activeTrackPolyline?.let { map.overlays.remove(it) }
             activeTrackPolyline = null
-            loadSavedTracks()
             if (wasRecording) {
+                loadSavedTracksAsync()
                 showSavedTrackSnackbarIfNeeded()
                 syncTracksSilently()
             }
@@ -1154,24 +1157,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadSavedTracks() {
+    private fun loadSavedTracksAsync() {
+        val request = ++savedTracksLoadRequest
+        backgroundExecutor.execute {
+            val tracks = trackStore.loadTracks().filter { it.visible }
+            runOnUiThread {
+                if (request == savedTracksLoadRequest) {
+                    applySavedTrackOverlays(tracks)
+                }
+            }
+        }
+    }
+
+    private fun applySavedTrackOverlays(tracks: List<RecordedTrack>) {
         savedTrackOverlays.forEach { map.overlays.remove(it) }
         savedTrackOverlays.clear()
 
-        trackStore.loadTracks()
-            .filter { it.visible }
-            .forEach { track ->
-                if (track.points.size == 1) {
-                    val marker = createSinglePointTrackMarker(track)
-                    savedTrackOverlays.add(marker)
-                    map.overlays.add(marker)
-                } else {
-                    val polyline = createTrackPolyline(track.type)
-                    polyline.setPoints(track.points.map { it.toGeoPoint() })
-                    savedTrackOverlays.add(polyline)
-                    map.overlays.add(polyline)
-                }
+        tracks.forEach { track ->
+            if (track.points.size == 1) {
+                val marker = createSinglePointTrackMarker(track)
+                savedTrackOverlays.add(marker)
+                map.overlays.add(marker)
+            } else {
+                val polyline = createTrackPolyline(track.type)
+                polyline.setPoints(track.points.map { it.toGeoPoint() })
+                savedTrackOverlays.add(polyline)
+                map.overlays.add(polyline)
             }
+        }
         map.invalidate()
     }
 
@@ -1215,6 +1228,7 @@ class MainActivity : AppCompatActivity() {
         hideSection()
         isMeasurementMode = true
         measurementPoints.clear()
+        measurementGeoPoints.clear()
         fixedMeasurementDistanceMeters = 0f
         measurementPolyline?.let { map.overlays.remove(it) }
         measurementPolyline = null
@@ -1227,6 +1241,7 @@ class MainActivity : AppCompatActivity() {
     private fun exitMeasurementMode() {
         isMeasurementMode = false
         measurementPoints.clear()
+        measurementGeoPoints.clear()
         fixedMeasurementDistanceMeters = 0f
         measurementPolyline?.let { map.overlays.remove(it) }
         measurementPolyline = null
@@ -1242,8 +1257,9 @@ class MainActivity : AppCompatActivity() {
             fixedMeasurementDistanceMeters += segmentDistanceMeters(previous, point)
         }
         measurementPoints.add(point)
+        measurementGeoPoints.add(point.toGeoPoint())
         updateMeasurementRoute()
-        syncRecordingState()
+        updateMeasurementControls()
     }
 
     private fun undoMeasurementPoint() {
@@ -1256,13 +1272,16 @@ class MainActivity : AppCompatActivity() {
             fixedMeasurementDistanceMeters = fixedMeasurementDistanceMeters.coerceAtLeast(0f)
         }
         measurementPoints.removeAt(measurementPoints.lastIndex)
+        if (measurementGeoPoints.isNotEmpty()) {
+            measurementGeoPoints.removeAt(measurementGeoPoints.lastIndex)
+        }
         updateMeasurementRoute()
-        syncRecordingState()
+        updateMeasurementControls()
     }
 
     private fun updateMeasurementRoute() {
         if (!isMeasurementMode) return
-        val previewPoints = measurementPreviewPoints()
+        val previewPoints = measurementPreviewGeoPoints()
         if (previewPoints.size >= 2) {
             val polyline = measurementPolyline ?: Polyline(map).apply {
                 outlinePaint.color = TrackType.CUSTOM.color
@@ -1272,7 +1291,7 @@ class MainActivity : AppCompatActivity() {
                 measurementPolyline = this
                 map.overlays.add(this)
             }
-            polyline.setPoints(previewPoints.map { it.toGeoPoint() })
+            polyline.setPoints(previewPoints)
         } else {
             measurementPolyline?.let { map.overlays.remove(it) }
             measurementPolyline = null
@@ -1292,9 +1311,25 @@ class MainActivity : AppCompatActivity() {
             measurementPolyline = this
             map.overlays.add(this)
         }
-        polyline.setPoints((measurementPoints.map { it.toGeoPoint() } + reticleTargetPoint()))
+        polyline.setPoints(measurementGeoPoints + reticleTargetPoint())
         updateMeasurementPanel()
         map.invalidate()
+    }
+
+    private fun updateMeasurementControls() {
+        measurementUndoFab.visibility = if (measurementPoints.isNotEmpty()) View.VISIBLE else View.GONE
+        updateMeasurementPanel()
+    }
+
+    private fun measurementPreviewGeoPoints(): List<GeoPoint> {
+        if (measurementPoints.isEmpty()) return emptyList()
+        val target = measurementTrackPoint()
+        val last = measurementPoints.last()
+        return if (segmentDistanceMeters(last, target) < 0.5f) {
+            measurementGeoPoints.toList()
+        } else {
+            measurementGeoPoints + target.toGeoPoint()
+        }
     }
 
     private fun updateMeasurementPanel() {
@@ -1375,7 +1410,7 @@ class MainActivity : AppCompatActivity() {
             name = name.ifBlank { GpxTrackStore.defaultTrackName(TrackType.CUSTOM, points.first().timeMillis) }
         )
         syncTracksSilently()
-        loadSavedTracks()
+        loadSavedTracksAsync()
         exitMeasurementMode()
     }
 
@@ -2625,7 +2660,7 @@ class MainActivity : AppCompatActivity() {
                     TRACK_ACTION_VISIBILITY -> {
                         trackStore.setTrackVisibility(track, !track.visible)
                         syncTracksSilently()
-                        loadSavedTracks()
+                        loadSavedTracksAsync()
                         showTracksScreen()
                     }
                     TRACK_ACTION_DELETE -> showDeleteDialog(track)
@@ -2654,7 +2689,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.save) { _, _ ->
                 trackStore.renameTrack(track, input.text.toString().trim())
                 syncTracksSilently()
-                loadSavedTracks()
+                loadSavedTracksAsync()
                 showTracksScreen()
             }
             .show()
@@ -2669,7 +2704,7 @@ class MainActivity : AppCompatActivity() {
                 syncManager.markDeleted(track)
                 trackStore.deleteTrack(track)
                 syncTracksSilently()
-                loadSavedTracks()
+                loadSavedTracksAsync()
                 showTracksScreen()
             }
             .show()
@@ -2809,9 +2844,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun activityCalendarCard(page: StatsPage, tracks: List<RecordedTrack>): View {
-        val activeDates = tracks
-            .map { Instant.ofEpochMilli(it.startedAtMillis).atZone(ZoneId.systemDefault()).toLocalDate() }
-            .toSet()
+        val tracksByDate = tracks.groupBy { trackLocalDate(it) }
+        val activeDates = tracksByDate.keys
         val dates = (27 downTo 0).map { LocalDate.now().minusDays(it.toLong()) }
 
         val card = contentCard()
@@ -2827,6 +2861,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             week.forEach { date ->
+                val dayTracks = tracksByDate[date].orEmpty()
                 row.addView(TextView(this).apply {
                     text = if (date in activeDates) "●" else "·"
                     gravity = Gravity.CENTER
@@ -2838,12 +2873,92 @@ class MainActivity : AppCompatActivity() {
                             ContextCompat.getColor(this@MainActivity, R.color.icu_sheet_divider)
                         }
                     )
-                    layoutParams = LinearLayout.LayoutParams(0, dp(30), 1f)
+                    if (dayTracks.isNotEmpty()) {
+                        isClickable = true
+                        isFocusable = true
+                        setOnClickListener {
+                            showActivityDayTooltip(this, date, dayTracks)
+                        }
+                    }
+                    layoutParams = LinearLayout.LayoutParams(0, dp(32), 1f)
                 })
             }
             card.addView(row)
         }
         return card
+    }
+
+    private fun showActivityDayTooltip(anchor: View, date: LocalDate, tracks: List<RecordedTrack>) {
+        infoTooltip?.dismiss()
+
+        val sortedTracks = tracks.sortedBy { it.startedAtMillis }
+        val title = TextView(this).apply {
+            text = "${formatCalendarDate(date)} — ${formatCalendarDistance(sortedTracks.sumOf { it.distanceMeters.toDouble() }.toFloat())}"
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val body = TextView(this).apply {
+            text = sortedTracks.mapIndexed { index, track ->
+                "${index + 1}) ${track.name}, ${formatCalendarDistance(track.distanceMeters)}, ${formatTrackStartTime(track.startedAtMillis)}"
+            }.joinToString("\n")
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 14f
+            setLineSpacing(dp(3).toFloat(), 1.0f)
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(243, 237, 247))
+                cornerRadius = dp(16).toFloat()
+            }
+            elevation = dp(6).toFloat()
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            addView(title)
+            addView(body, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) })
+        }
+
+        val root = findViewById<View>(R.id.mainContent)
+        val width = (resources.displayMetrics.widthPixels - dp(40)).coerceAtMost(dp(340))
+        val popup = PopupWindow(content, width, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(8).toFloat()
+        }
+        content.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val anchorOnScreen = IntArray(2)
+        anchor.getLocationOnScreen(anchorOnScreen)
+        val minX = dp(12)
+        val maxX = resources.displayMetrics.widthPixels - width - dp(12)
+        val x = (anchorOnScreen[0] + anchor.width / 2 - width / 2).coerceIn(minX, maxX.coerceAtLeast(minX))
+        val preferredY = anchorOnScreen[1] - content.measuredHeight - dp(10)
+        val y = if (preferredY >= dp(12)) preferredY else anchorOnScreen[1] + anchor.height + dp(10)
+        popup.showAtLocation(root, Gravity.NO_GRAVITY, x, y)
+        infoTooltip = popup
+    }
+
+    private fun trackLocalDate(track: RecordedTrack): LocalDate {
+        return Instant.ofEpochMilli(track.startedAtMillis).atZone(ZoneId.systemDefault()).toLocalDate()
+    }
+
+    private fun formatCalendarDate(date: LocalDate): String {
+        return date.format(DateTimeFormatter.ofPattern("d MMMM", Locale.forLanguageTag("ru-RU")))
+    }
+
+    private fun formatCalendarDistance(distanceMeters: Float): String {
+        return String.format(Locale.forLanguageTag("ru-RU"), "%.1f км", distanceMeters / 1000f)
+    }
+
+    private fun formatTrackStartTime(timeMillis: Long): String {
+        return DateTimeFormatter.ofPattern("HH:mm", Locale.forLanguageTag("ru-RU"))
+            .withZone(ZoneId.systemDefault())
+            .format(Instant.ofEpochMilli(timeMillis))
     }
 
     private fun monthlyDistanceCard(page: StatsPage, tracks: List<RecordedTrack>): View {
@@ -3757,8 +3872,9 @@ class MainActivity : AppCompatActivity() {
         private const val TRACK_STROKE_WIDTH = 8f
         private const val TIMER_INTERVAL_MS = 1_000L
         private const val FRIEND_HIGHLIGHT_DURATION_MS = 3_500L
-        private const val SPLASH_VISIBLE_MS = 1_100L
-        private const val SPLASH_DURATION_MS = 1_500L
+        private const val STARTUP_DEFER_MS = 350L
+        private const val SPLASH_VISIBLE_MS = 450L
+        private const val SPLASH_DURATION_MS = 850L
         private const val FRIEND_LOCATION_REFRESH_MS = 30_000L
         private const val PROFILE_REFRESH_MS = 60_000L
         private const val FRIEND_MAP_ANIMATION_MS = 450L
