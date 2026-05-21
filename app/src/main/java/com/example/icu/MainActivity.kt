@@ -998,10 +998,6 @@ class MainActivity : AppCompatActivity() {
             sheet.dismiss()
             requestStartRecording(selectedType)
         }
-        content.findViewById<MaterialButton>(R.id.uploadTrackButton).setOnClickListener {
-            showSnackbar(getString(R.string.gpx_upload_mock))
-        }
-
         addTrackSheet = sheet
         sheet.show()
     }
