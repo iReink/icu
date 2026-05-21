@@ -10,7 +10,8 @@ enum class TrackType(
     val color: Int
 ) {
     WALK("walk", "Пешком", Color.BLACK),
-    BIKE("bike", "Велосипед", Color.rgb(47, 91, 209));
+    BIKE("bike", "Велосипед", Color.rgb(47, 91, 209)),
+    CUSTOM("custom", "Ручной", Color.rgb(218, 32, 173));
 
     companion object {
         fun fromGpxType(value: String?): TrackType {

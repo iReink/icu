@@ -93,7 +93,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recordingPanel: View
     private lateinit var distanceText: TextView
     private lateinit var durationText: TextView
+    private lateinit var measurementPanel: View
+    private lateinit var measurementDistanceText: TextView
+    private lateinit var measurementPointCountText: TextView
+    private lateinit var measurementSaveButton: MaterialButton
     private lateinit var addTrackFab: FloatingActionButton
+    private lateinit var measurementUndoFab: FloatingActionButton
     private lateinit var myLocationButton: FloatingActionButton
     private lateinit var bottomNavigation: BottomNavigationView
     private lateinit var reticleView: ReticleView
@@ -115,10 +120,13 @@ class MainActivity : AppCompatActivity() {
     private var pendingLocationBroadcastDurationMs: Long? = null
     private var pendingInviteToken: String? = null
     private var highlightedFriendshipId: String? = null
-    private var savedTrackOverlays = mutableListOf<Polyline>()
+    private var savedTrackOverlays = mutableListOf<Overlay>()
     private var friendLocationOverlays = mutableListOf<Overlay>()
     private var destinationMarker: Marker? = null
     private var activeTrackPolyline: Polyline? = null
+    private var measurementPolyline: Polyline? = null
+    private val measurementPoints = mutableListOf<TrackPoint>()
+    private var isMeasurementMode = false
     private var isReceiverRegistered = false
     private var shouldFollowLocation = true
     private var wasRecording = false
@@ -149,6 +157,13 @@ class MainActivity : AppCompatActivity() {
         override fun run() {
             updateRecordingPanelTime()
             elapsedHandler.postDelayed(this, TIMER_INTERVAL_MS)
+        }
+    }
+
+    private val measurementTicker = object : Runnable {
+        override fun run() {
+            updateMeasurementRoute()
+            elapsedHandler.postDelayed(this, MEASUREMENT_UPDATE_MS)
         }
     }
 
@@ -237,6 +252,7 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
+                    isMeasurementMode -> exitMeasurementMode()
                     sectionPanel.visibility == View.VISIBLE -> handleSectionBack()
                     else -> finish()
                 }
@@ -259,6 +275,9 @@ class MainActivity : AppCompatActivity() {
         refreshFriendLocationsOnMap()
         elapsedHandler.removeCallbacks(friendLocationRefreshTicker)
         elapsedHandler.postDelayed(friendLocationRefreshTicker, FRIEND_LOCATION_REFRESH_MS)
+        if (isMeasurementMode) {
+            elapsedHandler.post(measurementTicker)
+        }
     }
 
     override fun onPause() {
@@ -268,6 +287,7 @@ class MainActivity : AppCompatActivity() {
         map.onPause()
         super.onPause()
         elapsedHandler.removeCallbacks(elapsedTicker)
+        elapsedHandler.removeCallbacks(measurementTicker)
         elapsedHandler.removeCallbacks(friendLocationRefreshTicker)
         friendTooltip?.dismiss()
         infoTooltip?.dismiss()
@@ -290,7 +310,12 @@ class MainActivity : AppCompatActivity() {
         recordingPanel = findViewById(R.id.recordingPanel)
         distanceText = findViewById(R.id.distanceText)
         durationText = findViewById(R.id.durationText)
+        measurementPanel = findViewById(R.id.measurementPanel)
+        measurementDistanceText = findViewById(R.id.measurementDistanceText)
+        measurementPointCountText = findViewById(R.id.measurementPointCountText)
+        measurementSaveButton = findViewById(R.id.measurementSaveButton)
         addTrackFab = findViewById(R.id.addTrackFab)
+        measurementUndoFab = findViewById(R.id.measurementUndoFab)
         myLocationButton = findViewById(R.id.myLocationButton)
         bottomNavigation = findViewById(R.id.bottomNavigation)
         reticleView = findViewById(R.id.reticleView)
@@ -383,6 +408,7 @@ class MainActivity : AppCompatActivity() {
             override fun singleTapConfirmedHelper(point: GeoPoint): Boolean = false
 
             override fun longPressHelper(point: GeoPoint): Boolean {
+                if (isMeasurementMode) return true
                 showDestinationPreviewSheet(reticleTargetPoint())
                 return true
             }
@@ -409,7 +435,7 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
                 R.id.navSettings -> {
-                    showSettingsScreen()
+                    showToolsScreen()
                     true
                 }
                 else -> false
@@ -427,7 +453,23 @@ class MainActivity : AppCompatActivity() {
         }
 
         addTrackFab.setOnClickListener {
-            showAddTrackSheet()
+            if (isMeasurementMode) {
+                addMeasurementPoint()
+            } else {
+                showAddTrackSheet()
+            }
+        }
+
+        measurementUndoFab.setOnClickListener {
+            undoMeasurementPoint()
+        }
+
+        findViewById<MaterialButton>(R.id.measurementBackButton).setOnClickListener {
+            exitMeasurementMode()
+        }
+
+        measurementSaveButton.setOnClickListener {
+            showSaveMeasurementDialog()
         }
 
         findViewById<MaterialButton>(R.id.finishRecordingButton).setOnClickListener {
@@ -1057,10 +1099,13 @@ class MainActivity : AppCompatActivity() {
         val isRecording = state.isRecording
         val isSectionVisible = sectionPanel.visibility == View.VISIBLE
 
-        recordingPanel.visibility = if (isRecording && !isSectionVisible) View.VISIBLE else View.GONE
-        addTrackFab.visibility = if (!isRecording && !isSectionVisible) View.VISIBLE else View.GONE
-        myLocationButton.visibility = if (!isSectionVisible) View.VISIBLE else View.GONE
-        reticleView.visibility = if (!isSectionVisible) View.VISIBLE else View.GONE
+        recordingPanel.visibility = if (isRecording && !isSectionVisible && !isMeasurementMode) View.VISIBLE else View.GONE
+        measurementPanel.visibility = if (isMeasurementMode) View.VISIBLE else View.GONE
+        bottomNavigation.visibility = if (isMeasurementMode) View.GONE else View.VISIBLE
+        addTrackFab.visibility = if (!isRecording && !isSectionVisible || isMeasurementMode) View.VISIBLE else View.GONE
+        myLocationButton.visibility = if (!isSectionVisible && !isMeasurementMode) View.VISIBLE else View.GONE
+        reticleView.visibility = if (!isSectionVisible || isMeasurementMode) View.VISIBLE else View.GONE
+        measurementUndoFab.visibility = if (isMeasurementMode && measurementPoints.isNotEmpty()) View.VISIBLE else View.GONE
 
         if (isRecording) {
             updateRecordingPanelTime()
@@ -1112,10 +1157,16 @@ class MainActivity : AppCompatActivity() {
         trackStore.loadTracks()
             .filter { it.visible }
             .forEach { track ->
-                val polyline = createTrackPolyline(track.type)
-                polyline.setPoints(track.points.map { it.toGeoPoint() })
-                savedTrackOverlays.add(polyline)
-                map.overlays.add(polyline)
+                if (track.points.size == 1) {
+                    val marker = createSinglePointTrackMarker(track)
+                    savedTrackOverlays.add(marker)
+                    map.overlays.add(marker)
+                } else {
+                    val polyline = createTrackPolyline(track.type)
+                    polyline.setPoints(track.points.map { it.toGeoPoint() })
+                    savedTrackOverlays.add(polyline)
+                    map.overlays.add(polyline)
+                }
             }
         map.invalidate()
     }
@@ -1127,6 +1178,190 @@ class MainActivity : AppCompatActivity() {
             outlinePaint.isAntiAlias = true
             setOnClickListener { _, _, _ -> true }
         }
+    }
+
+    private fun createSinglePointTrackMarker(track: RecordedTrack): Marker {
+        return Marker(map).apply {
+            position = track.points.first().toGeoPoint()
+            icon = BitmapDrawable(resources, createTrackPointIcon(track.type.color))
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+            setOnMarkerClickListener { _, _ -> true }
+        }
+    }
+
+    private fun createTrackPointIcon(color: Int): Bitmap {
+        val size = dp(18).coerceAtLeast(18)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val center = size / 2f
+        paint.style = Paint.Style.FILL
+        paint.color = Color.WHITE
+        canvas.drawCircle(center, center, center, paint)
+        paint.color = color
+        canvas.drawCircle(center, center, center - dp(3), paint)
+        return bitmap
+    }
+
+    private fun enterMeasurementMode() {
+        if (TrackRecordingService.currentState.isRecording) {
+            showSnackbar(getString(R.string.recording_already_started))
+            return
+        }
+        hideSection()
+        isMeasurementMode = true
+        measurementPoints.clear()
+        measurementPolyline?.let { map.overlays.remove(it) }
+        measurementPolyline = null
+        bottomNavigation.visibility = View.GONE
+        addTrackFab.setImageResource(R.drawable.ic_plus_circle)
+        updateMeasurementRoute()
+        elapsedHandler.post(measurementTicker)
+        syncRecordingState()
+    }
+
+    private fun exitMeasurementMode() {
+        isMeasurementMode = false
+        elapsedHandler.removeCallbacks(measurementTicker)
+        measurementPoints.clear()
+        measurementPolyline?.let { map.overlays.remove(it) }
+        measurementPolyline = null
+        bottomNavigation.visibility = View.VISIBLE
+        bottomNavigation.selectedItemId = R.id.navMap
+        syncRecordingState()
+        map.invalidate()
+    }
+
+    private fun addMeasurementPoint() {
+        val point = measurementTrackPoint()
+        measurementPoints.add(point)
+        updateMeasurementRoute()
+        syncRecordingState()
+    }
+
+    private fun undoMeasurementPoint() {
+        if (measurementPoints.isEmpty()) return
+        measurementPoints.removeAt(measurementPoints.lastIndex)
+        updateMeasurementRoute()
+        syncRecordingState()
+    }
+
+    private fun updateMeasurementRoute() {
+        if (!isMeasurementMode) return
+        val previewPoints = measurementPreviewPoints()
+        if (previewPoints.size >= 2) {
+            val polyline = measurementPolyline ?: Polyline(map).apply {
+                outlinePaint.color = TrackType.CUSTOM.color
+                outlinePaint.strokeWidth = TRACK_STROKE_WIDTH
+                outlinePaint.isAntiAlias = true
+                setOnClickListener { _, _, _ -> true }
+                measurementPolyline = this
+                map.overlays.add(this)
+            }
+            polyline.setPoints(previewPoints.map { it.toGeoPoint() })
+        } else {
+            measurementPolyline?.let { map.overlays.remove(it) }
+            measurementPolyline = null
+        }
+
+        if (measurementPoints.isEmpty()) {
+            measurementDistanceText.text = getString(R.string.measurement_first_point)
+            measurementPointCountText.visibility = View.GONE
+            measurementSaveButton.visibility = View.GONE
+        } else {
+            measurementDistanceText.text = formatDistance(calculateRouteDistance(previewPoints))
+            measurementPointCountText.text = formatPointCount(measurementPoints.size)
+            measurementPointCountText.visibility = View.VISIBLE
+            measurementSaveButton.visibility = View.VISIBLE
+        }
+        map.invalidate()
+    }
+
+    private fun measurementPreviewPoints(): List<TrackPoint> {
+        if (measurementPoints.isEmpty()) return emptyList()
+        val target = measurementTrackPoint()
+        val last = measurementPoints.last()
+        return if (segmentDistanceMeters(last, target) < 0.5f) {
+            measurementPoints.toList()
+        } else {
+            measurementPoints + target
+        }
+    }
+
+    private fun measurementTrackPoint(): TrackPoint {
+        val point = reticleTargetPoint()
+        return TrackPoint(
+            latitude = point.latitude,
+            longitude = point.longitude,
+            altitude = null,
+            timeMillis = System.currentTimeMillis()
+        )
+    }
+
+    private fun showSaveMeasurementDialog() {
+        if (measurementPoints.isEmpty()) return
+        val savePoints = measurementPreviewPoints().ifEmpty { measurementPoints.toList() }
+        val input = EditText(this).apply {
+            setText(GpxTrackStore.defaultTrackName(TrackType.CUSTOM, savePoints.first().timeMillis))
+            selectAll()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        }
+        val container = FrameLayout(this).apply {
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(input)
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.measurement_route_name_title)
+            .setView(container)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.save) { _, _ ->
+                saveMeasurementRoute(savePoints, input.text.toString().trim())
+            }
+            .show()
+    }
+
+    private fun saveMeasurementRoute(points: List<TrackPoint>, name: String) {
+        if (points.isEmpty()) return
+        trackStore.saveTrack(
+            type = TrackType.CUSTOM,
+            points = points,
+            distanceMeters = calculateRouteDistance(points),
+            startedAtMillis = points.first().timeMillis,
+            name = name.ifBlank { GpxTrackStore.defaultTrackName(TrackType.CUSTOM, points.first().timeMillis) }
+        )
+        syncTracksSilently()
+        loadSavedTracks()
+        exitMeasurementMode()
+    }
+
+    private fun calculateRouteDistance(points: List<TrackPoint>): Float {
+        var distanceMeters = 0f
+        points.zipWithNext { previous, current ->
+            distanceMeters += segmentDistanceMeters(previous, current)
+        }
+        return distanceMeters
+    }
+
+    private fun segmentDistanceMeters(previous: TrackPoint, current: TrackPoint): Float {
+        val result = FloatArray(1)
+        Location.distanceBetween(
+            previous.latitude,
+            previous.longitude,
+            current.latitude,
+            current.longitude,
+            result
+        )
+        return result[0]
+    }
+
+    private fun formatPointCount(count: Int): String {
+        val word = when {
+            count % 10 == 1 && count % 100 != 11 -> "точка"
+            count % 10 in 2..4 && count % 100 !in 12..14 -> "точки"
+            else -> "точек"
+        }
+        return "$count $word"
     }
 
     private fun showDestinationPreviewSheet(point: GeoPoint) {
@@ -1300,26 +1535,65 @@ class MainActivity : AppCompatActivity() {
         currentSection = Section.TRACKS
         val tracks = trackStore.loadTracks()
         showSection(getString(R.string.my_tracks))
-        setSectionContentPadding(horizontalDp = 20)
+        setSectionContentPadding(horizontalDp = 0)
 
         if (tracks.isEmpty()) {
             sectionContent.addView(emptyStateText(getString(R.string.no_tracks)))
             return
         }
 
-        tracks.groupBy { GpxTrackStore.monthKey(it) }
+        val pages = listOf(
+            TrackListPage(getString(R.string.walk_tracks), TrackType.WALK),
+            TrackListPage(getString(R.string.bike_tracks), TrackType.BIKE),
+            TrackListPage(getString(R.string.manual_tracks), TrackType.CUSTOM)
+        )
+        val tabs = TabLayout(this).apply {
+            tabMode = TabLayout.MODE_FIXED
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val pager = ViewPager2(this).apply {
+            adapter = TracksPagerAdapter(pages, tracks)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                (resources.displayMetrics.heightPixels - dp(154)).coerceAtLeast(dp(420))
+            )
+        }
+        sectionContent.addView(tabs)
+        sectionContent.addView(pager)
+        TabLayoutMediator(tabs, pager) { tab, position ->
+            tab.text = pages[position].title
+        }.attach()
+    }
+
+    private fun tracksPageView(type: TrackType, tracks: List<RecordedTrack>): View {
+        val pageTracks = tracks.filter { it.type == type }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), 0, dp(20), dp(32))
+        }
+
+        if (pageTracks.isEmpty()) {
+            content.addView(emptyStateText(getString(R.string.no_tracks)))
+            return content
+        }
+
+        pageTracks.groupBy { GpxTrackStore.monthKey(it) }
             .toSortedMap(compareByDescending<YearMonth> { it.year }.thenByDescending { it.monthValue })
             .forEach { (month, monthTracks) ->
-                sectionContent.addView(groupTitle(formatMonthTitle(month)))
+                content.addView(groupTitle(formatMonthTitle(month)))
                 monthTracks.sortedByDescending { it.startedAtMillis }.forEach { track ->
-                    sectionContent.addView(trackCard(track))
+                    content.addView(trackCard(track))
                 }
             }
+        return content
     }
 
     private fun showStatisticsScreen() {
         currentSection = Section.STATISTICS
-        val tracks = trackStore.loadTracks()
+        val tracks = trackStore.loadTracks().filter { it.type != TrackType.CUSTOM }
         showSection(getString(R.string.statistics))
         setSectionContentPadding(horizontalDp = 0)
 
@@ -1351,9 +1625,9 @@ class MainActivity : AppCompatActivity() {
         }.attach()
     }
 
-    private fun showSettingsScreen() {
+    private fun showToolsScreen() {
         currentSection = Section.SETTINGS
-        showSection(getString(R.string.settings))
+        showSection(getString(R.string.tools))
         setSectionContentPadding(horizontalDp = 20)
         sectionContent.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1362,6 +1636,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
+            addView(rulerToolRow())
             addView(settingsRow())
             addView(View(this@MainActivity), LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1385,6 +1660,59 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         })
+    }
+
+    private fun rulerToolRow(): View {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ic_tools)
+                imageTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+                    rightMargin = dp(12)
+                }
+                setPadding(dp(7), dp(7), dp(7), dp(7))
+            })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(this@MainActivity).apply {
+                    text = getString(R.string.ruler_tool_title)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                    textSize = 17f
+                    typeface = Typeface.DEFAULT_BOLD
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = getString(R.string.ruler_tool_subtitle)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                    textSize = 13f
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        topMargin = dp(2)
+                    }
+                })
+            })
+        }
+        return com.google.android.material.card.MaterialCardView(this).apply {
+            radius = dp(8).toFloat()
+            cardElevation = 0f
+            strokeWidth = 0
+            setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.icu_card_surface))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { enterMeasurementMode() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(12)
+            }
+            addView(content)
+        }
     }
 
     private fun showChangelogSheet() {
@@ -3305,6 +3633,11 @@ class MainActivity : AppCompatActivity() {
         val accentColor: Int
     )
 
+    private data class TrackListPage(
+        val title: String,
+        val type: TrackType
+    )
+
     private enum class Section {
         NONE,
         TRACKS,
@@ -3345,6 +3678,30 @@ class MainActivity : AppCompatActivity() {
 
     private class StatsPageHolder(val container: FrameLayout) : RecyclerView.ViewHolder(container)
 
+    private inner class TracksPagerAdapter(
+        private val pages: List<TrackListPage>,
+        private val tracks: List<RecordedTrack>
+    ) : RecyclerView.Adapter<TracksPageHolder>() {
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): TracksPageHolder {
+            val container = FrameLayout(parent.context).apply {
+                layoutParams = RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            }
+            return TracksPageHolder(container)
+        }
+
+        override fun onBindViewHolder(holder: TracksPageHolder, position: Int) {
+            holder.container.removeAllViews()
+            holder.container.addView(tracksPageView(pages[position].type, tracks))
+        }
+
+        override fun getItemCount(): Int = pages.size
+    }
+
+    private class TracksPageHolder(val container: FrameLayout) : RecyclerView.ViewHolder(container)
+
     companion object {
         private const val TRACK_ACTION_RENAME = 1
         private const val TRACK_ACTION_VISIBILITY = 2
@@ -3363,6 +3720,7 @@ class MainActivity : AppCompatActivity() {
         private const val FRIEND_MAP_ANIMATION_MS = 450L
         private const val FRIEND_TOOLTIP_DELAY_MS = 80L
         private const val TRACK_SAVED_SNACKBAR_MS = 10_000
+        private const val MEASUREMENT_UPDATE_MS = 180L
         private const val CHANGELOG_ASSET_NAME = "CHANGELOG.md"
     }
 }

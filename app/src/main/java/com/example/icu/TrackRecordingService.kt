@@ -195,6 +195,7 @@ class TrackRecordingService : Service() {
         return when (type) {
             TrackType.WALK -> WALK_INTERVAL_MS
             TrackType.BIKE -> BIKE_INTERVAL_MS
+            TrackType.CUSTOM -> WALK_INTERVAL_MS
         }
     }
 

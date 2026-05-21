@@ -17,7 +17,16 @@
     <string name="menu">Меню</string>
     <string name="my_tracks">Мои треки</string>
     <string name="statistics">Статистика</string>
-    <string name="settings">Настройки</string>
+    <string name="settings">Инструменты</string>
+    <string name="tools">Инструменты</string>
+    <string name="ruler_tool_title">Рулетка</string>
+    <string name="ruler_tool_subtitle">Построение и измерение маршрута на карте</string>
+    <string name="measurement_first_point">Выберите первую точку\nи нажмите плюс</string>
+    <string name="measurement_save_route">Сохранить</string>
+    <string name="measurement_route_name_title">Название маршрута</string>
+    <string name="manual_tracks">Ручные</string>
+    <string name="walk_tracks">Пешие</string>
+    <string name="bike_tracks">Велосипедные</string>
     <string name="app_version">Версия %1$s</string>
     <string name="changelog_title">Что нового</string>
     <string name="high_accuracy">Высокая точность</string>
@@ -35,6 +44,8 @@
     <string name="track_name">Название трека</string>
     <string name="save">Сохранить</string>
     <string name="cancel">Отмена</string>
+    <string name="back">Назад</string>
+    <string name="undo">Отменить</string>
     <string name="delete_track_title">Удалить трек?</string>
     <string name="delete_track_message">Трек будет удалён из приложения и с карты.</string>
     <string name="no_tracks">Пока нет сохранённых треков</string>

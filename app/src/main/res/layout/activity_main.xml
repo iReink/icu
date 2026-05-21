@@ -82,6 +82,80 @@
                 app:backgroundTint="@android:color/transparent" />
         </LinearLayout>
 
+        <LinearLayout
+            android:id="@+id/measurementPanel"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginStart="12dp"
+            android:layout_marginTop="48dp"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/bg_recording_panel"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/measurementBackButton"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="0dp"
+                android:layout_height="64dp"
+                android:layout_weight="1"
+                android:fontFamily="sans-serif-medium"
+                android:minHeight="0dp"
+                android:minWidth="0dp"
+                android:text="@string/back"
+                android:textAllCaps="false"
+                android:textColor="#6750A4"
+                android:textSize="16sp"
+                app:backgroundTint="@android:color/transparent" />
+
+            <LinearLayout
+                android:id="@+id/measurementInfoColumn"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="2"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/measurementDistanceText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif"
+                    android:gravity="center"
+                    android:text="@string/measurement_first_point"
+                    android:textColor="#4A4459"
+                    android:textSize="16sp" />
+
+                <TextView
+                    android:id="@+id/measurementPointCountText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif"
+                    android:gravity="center"
+                    android:textColor="#9B94A5"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/measurementSaveButton"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="0dp"
+                android:layout_height="64dp"
+                android:layout_weight="1"
+                android:fontFamily="sans-serif-medium"
+                android:minHeight="0dp"
+                android:minWidth="0dp"
+                android:text="@string/measurement_save_route"
+                android:textAllCaps="false"
+                android:textColor="#6750A4"
+                android:textSize="16sp"
+                android:visibility="invisible"
+                app:backgroundTint="@android:color/transparent" />
+        </LinearLayout>
+
         <com.google.android.material.floatingactionbutton.FloatingActionButton
             android:id="@+id/myLocationButton"
             android:layout_width="56dp"
@@ -110,6 +184,22 @@
             app:fabCustomSize="72dp"
             app:maxImageSize="36dp"
             app:srcCompat="@drawable/ic_plus_circle"
+            app:tint="@color/icu_purple_ink" />
+
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/measurementUndoFab"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:layout_gravity="bottom|start"
+            android:layout_marginStart="24dp"
+            android:layout_marginBottom="16dp"
+            android:contentDescription="@string/undo"
+            android:visibility="gone"
+            app:backgroundTint="@color/white"
+            app:elevation="6dp"
+            app:fabCustomSize="72dp"
+            app:maxImageSize="34dp"
+            app:srcCompat="@drawable/ic_undo"
             app:tint="@color/icu_purple_ink" />
 
         <LinearLayout
