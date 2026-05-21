@@ -68,7 +68,10 @@ import com.google.android.material.tabs.TabLayoutMediator
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import androidx.viewpager2.widget.ViewPager2
+import org.osmdroid.events.MapListener
 import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.events.ScrollEvent
+import org.osmdroid.events.ZoomEvent
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -127,6 +130,7 @@ class MainActivity : AppCompatActivity() {
     private var measurementPolyline: Polyline? = null
     private val measurementPoints = mutableListOf<TrackPoint>()
     private var isMeasurementMode = false
+    private var fixedMeasurementDistanceMeters = 0f
     private var isReceiverRegistered = false
     private var shouldFollowLocation = true
     private var wasRecording = false
@@ -157,13 +161,6 @@ class MainActivity : AppCompatActivity() {
         override fun run() {
             updateRecordingPanelTime()
             elapsedHandler.postDelayed(this, TIMER_INTERVAL_MS)
-        }
-    }
-
-    private val measurementTicker = object : Runnable {
-        override fun run() {
-            updateMeasurementRoute()
-            elapsedHandler.postDelayed(this, MEASUREMENT_UPDATE_MS)
         }
     }
 
@@ -275,9 +272,6 @@ class MainActivity : AppCompatActivity() {
         refreshFriendLocationsOnMap()
         elapsedHandler.removeCallbacks(friendLocationRefreshTicker)
         elapsedHandler.postDelayed(friendLocationRefreshTicker, FRIEND_LOCATION_REFRESH_MS)
-        if (isMeasurementMode) {
-            elapsedHandler.post(measurementTicker)
-        }
     }
 
     override fun onPause() {
@@ -287,7 +281,6 @@ class MainActivity : AppCompatActivity() {
         map.onPause()
         super.onPause()
         elapsedHandler.removeCallbacks(elapsedTicker)
-        elapsedHandler.removeCallbacks(measurementTicker)
         elapsedHandler.removeCallbacks(friendLocationRefreshTicker)
         friendTooltip?.dismiss()
         infoTooltip?.dismiss()
@@ -413,6 +406,17 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
         }))
+        map.addMapListener(object : MapListener {
+            override fun onScroll(event: ScrollEvent?): Boolean {
+                if (isMeasurementMode) updateMeasurementPreview()
+                return false
+            }
+
+            override fun onZoom(event: ZoomEvent?): Boolean {
+                if (isMeasurementMode) updateMeasurementPreview()
+                return false
+            }
+        })
     }
 
     private fun setupBottomNavigation() {
@@ -1211,19 +1215,19 @@ class MainActivity : AppCompatActivity() {
         hideSection()
         isMeasurementMode = true
         measurementPoints.clear()
+        fixedMeasurementDistanceMeters = 0f
         measurementPolyline?.let { map.overlays.remove(it) }
         measurementPolyline = null
         bottomNavigation.visibility = View.GONE
         addTrackFab.setImageResource(R.drawable.ic_plus_circle)
         updateMeasurementRoute()
-        elapsedHandler.post(measurementTicker)
         syncRecordingState()
     }
 
     private fun exitMeasurementMode() {
         isMeasurementMode = false
-        elapsedHandler.removeCallbacks(measurementTicker)
         measurementPoints.clear()
+        fixedMeasurementDistanceMeters = 0f
         measurementPolyline?.let { map.overlays.remove(it) }
         measurementPolyline = null
         bottomNavigation.visibility = View.VISIBLE
@@ -1234,6 +1238,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun addMeasurementPoint() {
         val point = measurementTrackPoint()
+        measurementPoints.lastOrNull()?.let { previous ->
+            fixedMeasurementDistanceMeters += segmentDistanceMeters(previous, point)
+        }
         measurementPoints.add(point)
         updateMeasurementRoute()
         syncRecordingState()
@@ -1241,6 +1248,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun undoMeasurementPoint() {
         if (measurementPoints.isEmpty()) return
+        if (measurementPoints.size >= 2) {
+            fixedMeasurementDistanceMeters -= segmentDistanceMeters(
+                measurementPoints[measurementPoints.lastIndex - 1],
+                measurementPoints.last()
+            )
+            fixedMeasurementDistanceMeters = fixedMeasurementDistanceMeters.coerceAtLeast(0f)
+        }
         measurementPoints.removeAt(measurementPoints.lastIndex)
         updateMeasurementRoute()
         syncRecordingState()
@@ -1264,17 +1278,36 @@ class MainActivity : AppCompatActivity() {
             measurementPolyline = null
         }
 
+        updateMeasurementPanel()
+        map.invalidate()
+    }
+
+    private fun updateMeasurementPreview() {
+        if (!isMeasurementMode || measurementPoints.isEmpty()) return
+        val polyline = measurementPolyline ?: Polyline(map).apply {
+            outlinePaint.color = TrackType.CUSTOM.color
+            outlinePaint.strokeWidth = TRACK_STROKE_WIDTH
+            outlinePaint.isAntiAlias = true
+            setOnClickListener { _, _, _ -> true }
+            measurementPolyline = this
+            map.overlays.add(this)
+        }
+        polyline.setPoints((measurementPoints.map { it.toGeoPoint() } + reticleTargetPoint()))
+        updateMeasurementPanel()
+        map.invalidate()
+    }
+
+    private fun updateMeasurementPanel() {
         if (measurementPoints.isEmpty()) {
             measurementDistanceText.text = getString(R.string.measurement_first_point)
             measurementPointCountText.visibility = View.GONE
             measurementSaveButton.visibility = View.GONE
         } else {
-            measurementDistanceText.text = formatDistance(calculateRouteDistance(previewPoints))
+            measurementDistanceText.text = formatDistance(measurementDistanceWithPreview())
             measurementPointCountText.text = formatPointCount(measurementPoints.size)
             measurementPointCountText.visibility = View.VISIBLE
             measurementSaveButton.visibility = View.VISIBLE
         }
-        map.invalidate()
     }
 
     private fun measurementPreviewPoints(): List<TrackPoint> {
@@ -1298,6 +1331,11 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun measurementDistanceWithPreview(): Float {
+        val last = measurementPoints.lastOrNull() ?: return 0f
+        return fixedMeasurementDistanceMeters + segmentDistanceMeters(last, measurementTrackPoint())
+    }
+
     private fun showSaveMeasurementDialog() {
         if (measurementPoints.isEmpty()) return
         val savePoints = measurementPreviewPoints().ifEmpty { measurementPoints.toList() }
@@ -1319,6 +1357,12 @@ class MainActivity : AppCompatActivity() {
                 saveMeasurementRoute(savePoints, input.text.toString().trim())
             }
             .show()
+        input.post {
+            input.requestFocus()
+            input.selectAll()
+            val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     private fun saveMeasurementRoute(points: List<TrackPoint>, name: String) {
@@ -3720,7 +3764,6 @@ class MainActivity : AppCompatActivity() {
         private const val FRIEND_MAP_ANIMATION_MS = 450L
         private const val FRIEND_TOOLTIP_DELAY_MS = 80L
         private const val TRACK_SAVED_SNACKBAR_MS = 10_000
-        private const val MEASUREMENT_UPDATE_MS = 180L
         private const val CHANGELOG_ASSET_NAME = "CHANGELOG.md"
     }
 }
