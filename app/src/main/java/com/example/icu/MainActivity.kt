@@ -1,6 +1,8 @@
 package com.example.icu
 
 import android.Manifest
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -37,6 +39,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -109,6 +112,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var measurementUndoFab: FloatingActionButton
     private lateinit var myLocationButton: FloatingActionButton
     private lateinit var bottomNavigation: BottomNavigationView
+    private lateinit var contentHost: FrameLayout
     private lateinit var reticleView: ReticleView
     private lateinit var sectionPanel: LinearLayout
     private lateinit var sectionTitle: TextView
@@ -132,6 +136,7 @@ class MainActivity : AppCompatActivity() {
     private var visibleSavedTracks: List<RecordedTrack> = emptyList()
     private var friendLocationOverlays = mutableListOf<Overlay>()
     private var destinationMarker: Marker? = null
+    private var destinationDimOverlay: ReticleDimOverlay? = null
     private var activeTrackPolyline: Polyline? = null
     private var measurementPolyline: Polyline? = null
     private val measurementPoints = mutableListOf<TrackPoint>()
@@ -309,6 +314,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindViews() {
         map = findViewById(R.id.map)
+        contentHost = findViewById(R.id.contentHost)
         recordingPanel = findViewById(R.id.recordingPanel)
         distanceText = findViewById(R.id.distanceText)
         durationText = findViewById(R.id.durationText)
@@ -1484,6 +1490,40 @@ class MainActivity : AppCompatActivity() {
         measurementGeoPoints.add(point.toGeoPoint())
         updateMeasurementRoute()
         updateMeasurementControls()
+        showMeasurementPointFlash()
+    }
+
+    private fun showMeasurementPointFlash() {
+        val flash = View(this).apply {
+            setBackgroundColor(Color.WHITE)
+            alpha = 0f
+            isClickable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        contentHost.addView(
+            flash,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        flash.animate()
+            .alpha(0.32f)
+            .setDuration(42L)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                flash.animate()
+                    .alpha(0f)
+                    .setDuration(150L)
+                    .setInterpolator(DecelerateInterpolator(1.8f))
+                    .setListener(object : AnimatorListenerAdapter() {
+                        override fun onAnimationEnd(animation: Animator) {
+                            contentHost.removeView(flash)
+                        }
+                    })
+                    .start()
+            }
+            .start()
     }
 
     private fun undoMeasurementPoint() {
@@ -1709,6 +1749,10 @@ class MainActivity : AppCompatActivity() {
         onDestructive: (() -> Unit)?
     ) {
         val sheet = BottomSheetDialog(this)
+        showDestinationDimOverlay()
+        sheet.setOnDismissListener {
+            hideDestinationDimOverlay()
+        }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundResource(R.drawable.bg_bottom_sheet)
@@ -1773,11 +1817,48 @@ class MainActivity : AppCompatActivity() {
         }
         sheet.setContentView(content)
         sheet.setOnShowListener { dialog ->
+            sheet.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             val bottomSheet = (dialog as BottomSheetDialog)
                 .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
             bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
         }
         sheet.show()
+    }
+
+    private fun showDestinationDimOverlay() {
+        hideDestinationDimOverlay()
+        val overlay = ReticleDimOverlay(this).apply {
+            isClickable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            alpha = 0f
+            elevation = dp(9).toFloat()
+        }
+        destinationDimOverlay = overlay
+        contentHost.addView(
+            overlay,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        overlay.animate()
+            .alpha(1f)
+            .setDuration(140L)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
+    }
+
+    private fun hideDestinationDimOverlay() {
+        val overlay = destinationDimOverlay ?: return
+        destinationDimOverlay = null
+        overlay.animate()
+            .alpha(0f)
+            .setDuration(110L)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                contentHost.removeView(overlay)
+            }
+            .start()
     }
 
     private fun setDestinationMarker(point: GeoPoint) {
