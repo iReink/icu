@@ -139,7 +139,10 @@ class TrackRecordingService : Service() {
 
     private fun addRecordingLocation(location: Location) {
         val type = recordingType ?: return
-        if (!isUsableTrackLocation(location)) return
+        if (!isUsableTrackLocation(location)) {
+            uploadLiveLocationIfNeeded(location)
+            return
+        }
 
         val point = TrackPoint(
             latitude = location.latitude,
