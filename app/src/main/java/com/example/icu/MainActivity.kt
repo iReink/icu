@@ -59,6 +59,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.card.MaterialCardView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.radiobutton.MaterialRadioButton
@@ -90,6 +91,10 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity() {
     private lateinit var map: MapView
@@ -124,6 +129,7 @@ class MainActivity : AppCompatActivity() {
     private var pendingInviteToken: String? = null
     private var highlightedFriendshipId: String? = null
     private var savedTrackOverlays = mutableListOf<Overlay>()
+    private var visibleSavedTracks: List<RecordedTrack> = emptyList()
     private var friendLocationOverlays = mutableListOf<Overlay>()
     private var destinationMarker: Marker? = null
     private var activeTrackPolyline: Polyline? = null
@@ -401,7 +407,13 @@ class MainActivity : AppCompatActivity() {
             false
         }
         map.overlays.add(MapEventsOverlay(this, object : MapEventsReceiver {
-            override fun singleTapConfirmedHelper(point: GeoPoint): Boolean = false
+            override fun singleTapConfirmedHelper(point: GeoPoint): Boolean {
+                if (isMeasurementMode) {
+                    addMeasurementPoint()
+                    return true
+                }
+                return handleSavedTrackTap(point)
+            }
 
             override fun longPressHelper(point: GeoPoint): Boolean {
                 if (isMeasurementMode) return true
@@ -1172,6 +1184,7 @@ class MainActivity : AppCompatActivity() {
     private fun applySavedTrackOverlays(tracks: List<RecordedTrack>) {
         savedTrackOverlays.forEach { map.overlays.remove(it) }
         savedTrackOverlays.clear()
+        visibleSavedTracks = tracks
 
         tracks.forEach { track ->
             if (track.points.size == 1) {
@@ -1179,7 +1192,7 @@ class MainActivity : AppCompatActivity() {
                 savedTrackOverlays.add(marker)
                 map.overlays.add(marker)
             } else {
-                val polyline = createTrackPolyline(track.type)
+                val polyline = createSavedTrackPolyline(track)
                 polyline.setPoints(track.points.map { it.toGeoPoint() })
                 savedTrackOverlays.add(polyline)
                 map.overlays.add(polyline)
@@ -1193,7 +1206,23 @@ class MainActivity : AppCompatActivity() {
             outlinePaint.color = type.color
             outlinePaint.strokeWidth = TRACK_STROKE_WIDTH
             outlinePaint.isAntiAlias = true
-            setOnClickListener { _, _, _ -> true }
+            setOnClickListener { _, _, _ ->
+                if (isMeasurementMode) addMeasurementPoint()
+                true
+            }
+        }
+    }
+
+    private fun createSavedTrackPolyline(track: RecordedTrack): Polyline {
+        return createTrackPolyline(track.type).apply {
+            setOnClickListener { _, _, eventPos ->
+                if (isMeasurementMode) {
+                    addMeasurementPoint()
+                } else {
+                    handleSavedTrackTap(eventPos)
+                }
+                true
+            }
         }
     }
 
@@ -1202,8 +1231,203 @@ class MainActivity : AppCompatActivity() {
             position = track.points.first().toGeoPoint()
             icon = BitmapDrawable(resources, createTrackPointIcon(track.type.color))
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-            setOnMarkerClickListener { _, _ -> true }
+            setOnMarkerClickListener { marker, _ ->
+                if (isMeasurementMode) {
+                    addMeasurementPoint()
+                } else {
+                    handleSavedTrackTap(marker.position)
+                }
+                true
+            }
         }
+    }
+
+    private fun handleSavedTrackTap(point: GeoPoint): Boolean {
+        if (sectionPanel.visibility == View.VISIBLE || visibleSavedTracks.isEmpty()) return false
+
+        val hits = visibleSavedTracks
+            .mapNotNull { track ->
+                distanceToTrackPixels(track, point)
+                    ?.takeIf { distance -> distance <= dp(24).toDouble() }
+                    ?.let { distance -> TrackHit(track, distance) }
+            }
+            .sortedBy { it.distancePx }
+            .map { it.track }
+
+        return when (hits.size) {
+            0 -> false
+            1 -> {
+                showTrackTooltip(hits.first(), point)
+                true
+            }
+            else -> {
+                showTrackSelectionDialog(hits, point)
+                true
+            }
+        }
+    }
+
+    private fun distanceToTrackPixels(track: RecordedTrack, tapPoint: GeoPoint): Double? {
+        val points = track.points
+        if (points.isEmpty()) return null
+
+        val tap = pointOnScreen(tapPoint)
+        if (points.size == 1) {
+            return distancePixels(tap, pointOnScreen(points.first().toGeoPoint()))
+        }
+
+        var minDistance = Double.MAX_VALUE
+        points.zipWithNext { start, end ->
+            val distance = distanceToSegmentPixels(
+                tap = tap,
+                start = pointOnScreen(start.toGeoPoint()),
+                end = pointOnScreen(end.toGeoPoint())
+            )
+            minDistance = min(minDistance, distance)
+        }
+        return minDistance
+    }
+
+    private fun pointOnScreen(point: GeoPoint): Point {
+        return Point().also { map.projection.toPixels(point, it) }
+    }
+
+    private fun distanceToSegmentPixels(tap: Point, start: Point, end: Point): Double {
+        val dx = (end.x - start.x).toDouble()
+        val dy = (end.y - start.y).toDouble()
+        if (dx == 0.0 && dy == 0.0) return distancePixels(tap, start)
+
+        val t = (((tap.x - start.x) * dx + (tap.y - start.y) * dy) / (dx * dx + dy * dy))
+            .coerceIn(0.0, 1.0)
+        val projectionX = start.x + t * dx
+        val projectionY = start.y + t * dy
+        return sqrt((tap.x - projectionX) * (tap.x - projectionX) + (tap.y - projectionY) * (tap.y - projectionY))
+    }
+
+    private fun distancePixels(first: Point, second: Point): Double {
+        val dx = (first.x - second.x).toDouble()
+        val dy = (first.y - second.y).toDouble()
+        return sqrt(dx * dx + dy * dy)
+    }
+
+    private fun showTrackSelectionDialog(tracks: List<RecordedTrack>, tapPoint: GeoPoint) {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(8), dp(4), dp(4))
+        }
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle("Выберите маршрут")
+            .setView(content)
+            .setNegativeButton(R.string.cancel, null)
+            .create()
+
+        tracks.forEach { track ->
+            content.addView(trackSelectionCard(track) {
+                dialog.dismiss()
+                showTrackTooltip(track, tapPoint)
+            })
+        }
+
+        dialog.show()
+    }
+
+    private fun trackSelectionCard(track: RecordedTrack, onClick: () -> Unit): View {
+        return MaterialCardView(this).apply {
+            radius = dp(8).toFloat()
+            cardElevation = 0f
+            strokeWidth = 0
+            setCardBackgroundColor(Color.WHITE)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) }
+
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+
+                addView(View(this@MainActivity).apply {
+                    setBackgroundColor(track.type.color)
+                    layoutParams = LinearLayout.LayoutParams(dp(4), dp(48)).apply {
+                        rightMargin = dp(12)
+                    }
+                })
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(this@MainActivity).apply {
+                        text = track.name
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                        textSize = 16f
+                        typeface = Typeface.DEFAULT_BOLD
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = "${formatDistance(track.distanceMeters)} · ${formatTrackDate(track.startedAtMillis)}"
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                        textSize = 13f
+                    })
+                })
+            })
+        }
+    }
+
+    private fun showTrackTooltip(track: RecordedTrack, geoPoint: GeoPoint) {
+        infoTooltip?.dismiss()
+
+        val title = TextView(this).apply {
+            text = track.name
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val body = TextView(this).apply {
+            text = "${formatTrackDate(track.startedAtMillis)}\n${formatDistance(track.distanceMeters)} · ${formatDuration(track.durationMillis)}"
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 14f
+            setLineSpacing(dp(3).toFloat(), 1.0f)
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(243, 237, 247))
+                cornerRadius = dp(16).toFloat()
+            }
+            elevation = dp(6).toFloat()
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            addView(title)
+            addView(body, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) })
+        }
+
+        val width = (resources.displayMetrics.widthPixels - dp(40)).coerceAtMost(dp(320))
+        val popup = PopupWindow(content, width, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(8).toFloat()
+        }
+        content.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+
+        val pointOnMap = Point()
+        map.projection.toPixels(geoPoint, pointOnMap)
+        val mapOnScreen = IntArray(2)
+        map.getLocationOnScreen(mapOnScreen)
+        val minX = mapOnScreen[0] + dp(12)
+        val maxX = mapOnScreen[0] + map.width - width - dp(12)
+        val minY = mapOnScreen[1] + dp(12)
+        val x = (mapOnScreen[0] + pointOnMap.x - width / 2).coerceIn(minX, maxX.coerceAtLeast(minX))
+        val y = (mapOnScreen[1] + pointOnMap.y - content.measuredHeight - dp(14)).coerceAtLeast(minY)
+        popup.showAtLocation(map, Gravity.NO_GRAVITY, x, y)
+        infoTooltip = popup
     }
 
     private fun createTrackPointIcon(color: Int): Bitmap {
@@ -1287,7 +1511,10 @@ class MainActivity : AppCompatActivity() {
                 outlinePaint.color = TrackType.CUSTOM.color
                 outlinePaint.strokeWidth = TRACK_STROKE_WIDTH
                 outlinePaint.isAntiAlias = true
-                setOnClickListener { _, _, _ -> true }
+                setOnClickListener { _, _, _ ->
+                    addMeasurementPoint()
+                    true
+                }
                 measurementPolyline = this
                 map.overlays.add(this)
             }
@@ -1307,7 +1534,10 @@ class MainActivity : AppCompatActivity() {
             outlinePaint.color = TrackType.CUSTOM.color
             outlinePaint.strokeWidth = TRACK_STROKE_WIDTH
             outlinePaint.isAntiAlias = true
-            setOnClickListener { _, _, _ -> true }
+            setOnClickListener { _, _, _ ->
+                addMeasurementPoint()
+                true
+            }
             measurementPolyline = this
             map.overlays.add(this)
         }
@@ -3795,6 +4025,11 @@ class MainActivity : AppCompatActivity() {
     private data class TrackListPage(
         val title: String,
         val type: TrackType
+    )
+
+    private data class TrackHit(
+        val track: RecordedTrack,
+        val distancePx: Double
     )
 
     private enum class Section {
