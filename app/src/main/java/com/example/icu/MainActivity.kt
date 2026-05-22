@@ -239,7 +239,7 @@ class MainActivity : AppCompatActivity() {
         sessionStore = SupabaseSessionStore(this)
         syncMetadataStore = SyncMetadataStore(this)
         supabaseClient = SupabaseApiClient(sessionStore)
-        syncManager = SupabaseSyncManager(trackStore, syncMetadataStore, supabaseClient)
+        syncManager = SupabaseSyncManager(trackStore, savedPointStore, syncMetadataStore, supabaseClient)
         appLocationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         liveLocationUploader = LiveLocationUploader(this)
         setContentView(R.layout.activity_main)
@@ -958,7 +958,9 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     updateAuthHeader()
                     loadSavedTracksAsync()
+                    loadSavedPointsOnMap()
                     showTracksScreenIfVisible()
+                    showPointsScreenIfVisible()
                     if (showToast) {
                         showSnackbar(
                             getString(R.string.sync_finished, result.uploaded, result.downloaded),
@@ -979,6 +981,12 @@ class MainActivity : AppCompatActivity() {
     private fun showTracksScreenIfVisible() {
         if (sectionPanel.visibility == View.VISIBLE && currentSection == Section.TRACKS) {
             showTracksScreen()
+        }
+    }
+
+    private fun showPointsScreenIfVisible() {
+        if (sectionPanel.visibility == View.VISIBLE && currentSection == Section.POINTS) {
+            showPointsScreen()
         }
     }
 
@@ -1721,6 +1729,7 @@ class MainActivity : AppCompatActivity() {
         showDestinationSheet(
             title = getString(R.string.destination_preview_title),
             point = point,
+            holePoint = null,
             primaryText = getString(R.string.place_destination_marker),
             onPrimary = { setDestinationMarker(point) },
             secondaryText = getString(R.string.save_point),
@@ -1739,6 +1748,7 @@ class MainActivity : AppCompatActivity() {
         showDestinationSheet(
             title = getString(R.string.destination_title),
             point = point,
+            holePoint = null,
             primaryText = null,
             onPrimary = null,
             secondaryText = getString(R.string.save_point),
@@ -1748,9 +1758,29 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun showSavedPointDetailsSheet(point: SavedPoint) {
+        showDestinationSheet(
+            title = point.name,
+            point = point.toGeoPoint(),
+            holePoint = point.toGeoPoint(),
+            primaryText = null,
+            onPrimary = null,
+            secondaryText = null,
+            onSecondary = null,
+            destructiveText = getString(R.string.delete_destination),
+            onDestructive = {
+                savedPointStore.deletePoint(point)
+                syncTracksSilently()
+                loadSavedPointsOnMap()
+                showPointsScreenIfVisible()
+            }
+        )
+    }
+
     private fun showDestinationSheet(
         title: String,
         point: GeoPoint,
+        holePoint: GeoPoint?,
         primaryText: String?,
         onPrimary: (() -> Unit)?,
         secondaryText: String?,
@@ -1759,7 +1789,7 @@ class MainActivity : AppCompatActivity() {
         onDestructive: (() -> Unit)?
     ) {
         val sheet = BottomSheetDialog(this)
-        showDestinationDimOverlay()
+        showDestinationDimOverlay(holePoint)
         sheet.setOnDismissListener {
             hideDestinationDimOverlay()
         }
@@ -1866,28 +1896,45 @@ class MainActivity : AppCompatActivity() {
             addView(input)
         }
 
-        MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.save_point)
             .setView(container)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.save) { _, _ ->
                 val savedPoint = savedPointStore.savePoint(input.text.toString().trim(), point)
                 showSnackbar(getString(R.string.point_saved, savedPoint.name))
+                syncTracksSilently()
                 loadSavedPointsOnMap()
                 if (currentSection == Section.POINTS) showPointsScreen()
             }
-            .show()
-        input.post {
-            input.requestFocus()
-            input.selectAll()
-            val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            .create()
+        dialog.setOnShowListener {
+            dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+            input.postDelayed({
+                input.requestFocus()
+                input.selectAll()
+                val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            }, 120L)
         }
+        dialog.show()
     }
 
-    private fun showDestinationDimOverlay() {
+    private fun showDestinationDimOverlay(holePoint: GeoPoint? = null) {
         hideDestinationDimOverlay()
+        val holeOnScreen = holePoint?.let { point ->
+            val pointOnMap = Point().also { map.projection.toPixels(point, it) }
+            val mapLocation = IntArray(2)
+            val hostLocation = IntArray(2)
+            map.getLocationOnScreen(mapLocation)
+            contentHost.getLocationOnScreen(hostLocation)
+            Point(
+                mapLocation[0] - hostLocation[0] + pointOnMap.x,
+                mapLocation[1] - hostLocation[1] + pointOnMap.y
+            )
+        }
         val overlay = ReticleDimOverlay(this).apply {
+            setHoleCenter(holeOnScreen?.x?.toFloat(), holeOnScreen?.y?.toFloat())
             isClickable = false
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             alpha = 0f
@@ -1955,7 +2002,7 @@ class MainActivity : AppCompatActivity() {
                     icon = BitmapDrawable(resources, createSavedPointIcon())
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                     setOnMarkerClickListener { _, _ ->
-                        showDestinationDetailsSheet(point.toGeoPoint())
+                        showSavedPointDetailsSheet(point)
                         true
                     }
                 }
@@ -2170,19 +2217,19 @@ class MainActivity : AppCompatActivity() {
                             ViewGroup.LayoutParams.WRAP_CONTENT
                         ).apply { topMargin = dp(4) }
                     })
-                    if (!point.visible) {
-                        addView(TextView(this@MainActivity).apply {
-                            text = getString(R.string.hidden_on_map)
-                            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
-                            alpha = 0.72f
-                            textSize = 12f
-                            layoutParams = LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply { topMargin = dp(4) }
-                        })
-                    }
                 })
+
+                if (!point.visible) {
+                    addView(ImageView(this@MainActivity).apply {
+                        setImageResource(R.drawable.ic_eye_off)
+                        imageTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_text_secondary)
+                        alpha = 0.3f
+                        contentDescription = getString(R.string.hidden_on_map)
+                        layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                            rightMargin = dp(4)
+                        }
+                    })
+                }
 
                 addView(MaterialButton(this@MainActivity).apply {
                     backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
@@ -2225,6 +2272,7 @@ class MainActivity : AppCompatActivity() {
                     POINT_ACTION_RENAME -> showRenamePointDialog(point)
                     POINT_ACTION_VISIBILITY -> {
                         savedPointStore.setPointVisibility(point, !point.visible)
+                        syncTracksSilently()
                         loadSavedPointsOnMap()
                         showPointsScreen()
                     }
@@ -2253,6 +2301,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.save) { _, _ ->
                 savedPointStore.renamePoint(point, input.text.toString().trim())
+                syncTracksSilently()
                 loadSavedPointsOnMap()
                 showPointsScreen()
             }
@@ -2266,6 +2315,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.delete) { _, _ ->
                 savedPointStore.deletePoint(point)
+                syncTracksSilently()
                 loadSavedPointsOnMap()
                 showPointsScreen()
             }

@@ -162,6 +162,54 @@ class SupabaseApiClient(
         )
     }
 
+    fun fetchSavedPoints(session: SupabaseSession): List<RemoteSavedPoint> {
+        val response = request(
+            method = "GET",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/saved_points?select=*&deleted_at=is.null&order=updated_at.desc",
+            headers = authHeaders(session)
+        )
+        val array = JSONArray(response.text)
+        return (0 until array.length()).map { index ->
+            parseRemoteSavedPoint(array.getJSONObject(index))
+        }
+    }
+
+    fun upsertSavedPoint(session: SupabaseSession, point: RemoteSavedPoint) {
+        val body = JSONArray()
+            .put(point.toJson())
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+
+        request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/saved_points?on_conflict=id",
+            headers = authHeaders(session) + mapOf(
+                "Content-Type" to "application/json",
+                "Prefer" to "resolution=merge-duplicates,return=minimal"
+            ),
+            body = body
+        )
+    }
+
+    fun markSavedPointDeleted(session: SupabaseSession, remoteId: String) {
+        val now = Instant.now().toString()
+        val body = JSONObject()
+            .put("deleted_at", now)
+            .put("updated_at", now)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+
+        request(
+            method = "PATCH",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/saved_points?id=eq.$remoteId",
+            headers = authHeaders(session) + mapOf(
+                "Content-Type" to "application/json",
+                "Prefer" to "return=minimal"
+            ),
+            body = body
+        )
+    }
+
     fun createFriendInvite(session: SupabaseSession): String {
         val response = request(
             method = "POST",
@@ -376,6 +424,19 @@ class SupabaseApiClient(
         )
     }
 
+    private fun parseRemoteSavedPoint(json: JSONObject): RemoteSavedPoint {
+        return RemoteSavedPoint(
+            id = json.getString("id"),
+            userId = json.getString("user_id"),
+            name = json.getString("name"),
+            latitude = json.getDouble("latitude"),
+            longitude = json.getDouble("longitude"),
+            visible = json.optBoolean("visible", true),
+            createdAtMillis = Instant.parse(json.getString("created_at")).toEpochMilli(),
+            updatedAtMillis = Instant.parse(json.getString("updated_at")).toEpochMilli()
+        )
+    }
+
     private fun RemoteTrack.toJson(): JSONObject {
         val json = JSONObject()
             .put("id", id)
@@ -396,6 +457,19 @@ class SupabaseApiClient(
             json.put("ended_at", JSONObject.NULL)
         }
         return json
+    }
+
+    private fun RemoteSavedPoint.toJson(): JSONObject {
+        return JSONObject()
+            .put("id", id)
+            .put("user_id", userId)
+            .put("name", name)
+            .put("latitude", latitude)
+            .put("longitude", longitude)
+            .put("visible", visible)
+            .put("created_at", Instant.ofEpochMilli(createdAtMillis).toString())
+            .put("updated_at", Instant.ofEpochMilli(updatedAtMillis).toString())
+            .put("deleted_at", JSONObject.NULL)
     }
 
     private fun jsonHeaders(): Map<String, String> {
@@ -478,6 +552,17 @@ data class RemoteTrack(
     val endedAtMillis: Long?,
     val storagePath: String,
     val visible: Boolean,
+    val updatedAtMillis: Long
+)
+
+data class RemoteSavedPoint(
+    val id: String,
+    val userId: String,
+    val name: String,
+    val latitude: Double,
+    val longitude: Double,
+    val visible: Boolean,
+    val createdAtMillis: Long,
     val updatedAtMillis: Long
 )
 

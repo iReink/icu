@@ -17,12 +17,20 @@ class ReticleDimOverlay @JvmOverloads constructor(
         style = Paint.Style.FILL
     }
     private val path = Path()
+    private var holeCenterX: Float? = null
+    private var holeCenterY: Float? = null
+
+    fun setHoleCenter(x: Float?, y: Float?) {
+        holeCenterX = x
+        holeCenterY = y
+        invalidate()
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        val centerX = width / 2f
-        val centerY = height / 2f
+        val centerX = holeCenterX ?: width / 2f
+        val centerY = holeCenterY ?: height / 2f
         val density = resources.displayMetrics.density
         val holeRadius = 18f * density
 

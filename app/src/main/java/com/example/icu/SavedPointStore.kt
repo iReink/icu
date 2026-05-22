@@ -12,6 +12,7 @@ data class SavedPoint(
     val latitude: Double,
     val longitude: Double,
     val createdAtMillis: Long,
+    val updatedAtMillis: Long,
     val visible: Boolean
 ) {
     fun toGeoPoint(): GeoPoint = GeoPoint(latitude, longitude)
@@ -32,6 +33,7 @@ class SavedPointStore(context: Context) {
                     latitude = item.getDouble("latitude"),
                     longitude = item.getDouble("longitude"),
                     createdAtMillis = item.getLong("createdAtMillis"),
+                    updatedAtMillis = item.optLong("updatedAtMillis", item.getLong("createdAtMillis")),
                     visible = item.optBoolean("visible", true)
                 )
             }.sortedByDescending { it.createdAtMillis }
@@ -46,6 +48,7 @@ class SavedPointStore(context: Context) {
             latitude = point.latitude,
             longitude = point.longitude,
             createdAtMillis = now,
+            updatedAtMillis = now,
             visible = true
         )
         save(loadPoints() + savedPoint)
@@ -53,19 +56,48 @@ class SavedPointStore(context: Context) {
     }
 
     fun renamePoint(point: SavedPoint, name: String): SavedPoint {
-        val updated = point.copy(name = name.ifBlank { point.name })
+        val updated = point.copy(
+            name = name.ifBlank { point.name },
+            updatedAtMillis = System.currentTimeMillis()
+        )
         save(loadPoints().map { if (it.id == point.id) updated else it })
         return updated
     }
 
     fun setPointVisibility(point: SavedPoint, visible: Boolean): SavedPoint {
-        val updated = point.copy(visible = visible)
+        val updated = point.copy(
+            visible = visible,
+            updatedAtMillis = System.currentTimeMillis()
+        )
         save(loadPoints().map { if (it.id == point.id) updated else it })
         return updated
     }
 
     fun deletePoint(point: SavedPoint) {
         save(loadPoints().filterNot { it.id == point.id })
+        prefs.edit().putBoolean(deletedKey(point.id), true).apply()
+    }
+
+    fun upsertSyncedPoints(points: List<SavedPoint>) {
+        if (points.isEmpty()) return
+        val merged = loadPoints().associateBy { it.id }.toMutableMap()
+        points.forEach { point ->
+            val local = merged[point.id]
+            if (local == null || point.updatedAtMillis >= local.updatedAtMillis) {
+                merged[point.id] = point
+            }
+        }
+        save(merged.values.toList())
+    }
+
+    fun deletedPointIds(): List<String> {
+        return prefs.all.keys
+            .filter { it.startsWith(DELETED_PREFIX) && prefs.getBoolean(it, false) }
+            .map { it.removePrefix(DELETED_PREFIX) }
+    }
+
+    fun clearDeleted(pointId: String) {
+        prefs.edit().remove(deletedKey(pointId)).apply()
     }
 
     fun save(points: List<SavedPoint>) {
@@ -77,15 +109,19 @@ class SavedPointStore(context: Context) {
                 .put("latitude", point.latitude)
                 .put("longitude", point.longitude)
                 .put("createdAtMillis", point.createdAtMillis)
+                .put("updatedAtMillis", point.updatedAtMillis)
                 .put("visible", point.visible)
             )
         }
         prefs.edit().putString(KEY_POINTS, array.toString()).apply()
     }
 
+    private fun deletedKey(pointId: String) = "$DELETED_PREFIX$pointId"
+
     companion object {
         private const val PREFS_NAME = "saved_points"
         private const val KEY_POINTS = "points"
+        private const val DELETED_PREFIX = "deleted."
 
         fun defaultPointName(timeMillis: Long): String {
             return "Точка ${GpxTrackStore.defaultTrackName(TrackType.CUSTOM, timeMillis).substringAfter(' ')}"

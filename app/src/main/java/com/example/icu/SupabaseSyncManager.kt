@@ -2,6 +2,7 @@ package com.example.icu
 
 class SupabaseSyncManager(
     private val trackStore: GpxTrackStore,
+    private val pointStore: SavedPointStore,
     private val metadataStore: SyncMetadataStore,
     private val apiClient: SupabaseApiClient
 ) {
@@ -18,11 +19,22 @@ class SupabaseSyncManager(
             metadataStore.clearDeleted(remoteId)
             deleted += 1
         }
+        pointStore.deletedPointIds().forEach { pointId ->
+            withFreshSession({ refreshed -> session = refreshed }) { activeSession ->
+                apiClient.markSavedPointDeleted(activeSession, pointId)
+            }
+            pointStore.clearDeleted(pointId)
+            deleted += 1
+        }
 
         val remoteTracks = withFreshSession({ refreshed -> session = refreshed }) { activeSession ->
             apiClient.fetchTracks(activeSession)
         }
+        val remotePoints = withFreshSession({ refreshed -> session = refreshed }) { activeSession ->
+            apiClient.fetchSavedPoints(activeSession)
+        }
         val localTracks = trackStore.loadTracks()
+        val localPoints = pointStore.loadPoints()
 
         localTracks
             .filterNot { metadataStore.isSynced(it) }
@@ -34,6 +46,18 @@ class SupabaseSyncManager(
                     apiClient.upsertTrack(activeSession, track.toRemoteTrack(remoteId, activeSession.userId, storagePath))
                 }
                 metadataStore.markSynced(track, remoteId)
+                uploaded += 1
+            }
+        val remotePointById = remotePoints.associateBy { it.id }
+        localPoints
+            .filter { point ->
+                val remotePoint = remotePointById[point.id]
+                remotePoint == null || point.updatedAtMillis > remotePoint.updatedAtMillis
+            }
+            .forEach { point ->
+                withFreshSession({ refreshed -> session = refreshed }) { activeSession ->
+                    apiClient.upsertSavedPoint(activeSession, point.toRemoteSavedPoint(activeSession.userId))
+                }
                 uploaded += 1
             }
 
@@ -53,6 +77,18 @@ class SupabaseSyncManager(
                     downloaded += 1
                 }
             }
+        val localPointById = pointStore.loadPoints().associateBy { it.id }
+        val pointsToImport = remotePoints
+            .filterNot { pointStore.deletedPointIds().contains(it.id) }
+            .filter { remotePoint ->
+                val localPoint = localPointById[remotePoint.id]
+                localPoint == null || remotePoint.updatedAtMillis > localPoint.updatedAtMillis
+            }
+            .map { it.toSavedPoint() }
+        if (pointsToImport.isNotEmpty()) {
+            pointStore.upsertSyncedPoints(pointsToImport)
+            downloaded += pointsToImport.size
+        }
 
         return SyncResult(uploaded, downloaded, deleted)
     }
@@ -82,6 +118,31 @@ class SupabaseSyncManager(
             storagePath = storagePath,
             visible = visible,
             updatedAtMillis = System.currentTimeMillis()
+        )
+    }
+
+    private fun SavedPoint.toRemoteSavedPoint(userId: String): RemoteSavedPoint {
+        return RemoteSavedPoint(
+            id = id,
+            userId = userId,
+            name = name,
+            latitude = latitude,
+            longitude = longitude,
+            visible = visible,
+            createdAtMillis = createdAtMillis,
+            updatedAtMillis = updatedAtMillis
+        )
+    }
+
+    private fun RemoteSavedPoint.toSavedPoint(): SavedPoint {
+        return SavedPoint(
+            id = id,
+            name = name,
+            latitude = latitude,
+            longitude = longitude,
+            createdAtMillis = createdAtMillis,
+            updatedAtMillis = updatedAtMillis,
+            visible = visible
         )
     }
 
