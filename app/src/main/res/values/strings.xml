@@ -16,7 +16,13 @@
     <string name="zero_duration">00:00</string>
     <string name="menu">Меню</string>
     <string name="my_tracks">Мои треки</string>
+    <string name="points">Точки</string>
+    <string name="save_point">Сохранить точку</string>
+    <string name="point_name">Название точки</string>
+    <string name="point_saved">Точка сохранена: %1$s</string>
+    <string name="no_saved_points">Пока нет сохранённых точек</string>
     <string name="statistics">Статистика</string>
+    <string name="statistics_profile_subtitle">Километраж, календарь активности и графики</string>
     <string name="settings">Инструменты</string>
     <string name="tools">Инструменты</string>
     <string name="ruler_tool_title">Рулетка</string>

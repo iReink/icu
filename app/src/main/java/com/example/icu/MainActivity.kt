@@ -118,6 +118,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sectionTitle: TextView
     private lateinit var sectionContent: LinearLayout
     private lateinit var trackStore: GpxTrackStore
+    private lateinit var savedPointStore: SavedPointStore
     private lateinit var sessionStore: SupabaseSessionStore
     private lateinit var syncMetadataStore: SyncMetadataStore
     private lateinit var supabaseClient: SupabaseApiClient
@@ -233,6 +234,7 @@ class MainActivity : AppCompatActivity() {
 
         Configuration.getInstance().userAgentValue = packageName
         trackStore = GpxTrackStore(this)
+        savedPointStore = SavedPointStore(this)
         sessionStore = SupabaseSessionStore(this)
         syncMetadataStore = SyncMetadataStore(this)
         supabaseClient = SupabaseApiClient(sessionStore)
@@ -451,8 +453,8 @@ class MainActivity : AppCompatActivity() {
                     showTracksScreen()
                     true
                 }
-                R.id.navStatistics -> {
-                    showStatisticsScreen()
+                R.id.navPoints -> {
+                    showPointsScreen()
                     true
                 }
                 R.id.navProfile -> {
@@ -1719,6 +1721,8 @@ class MainActivity : AppCompatActivity() {
             point = point,
             primaryText = getString(R.string.place_destination_marker),
             onPrimary = { setDestinationMarker(point) },
+            secondaryText = getString(R.string.save_point),
+            onSecondary = { showSavePointDialog(point) },
             destructiveText = null,
             onDestructive = null
         )
@@ -1735,6 +1739,8 @@ class MainActivity : AppCompatActivity() {
             point = point,
             primaryText = null,
             onPrimary = null,
+            secondaryText = getString(R.string.save_point),
+            onSecondary = { showSavePointDialog(point) },
             destructiveText = getString(R.string.delete_destination),
             onDestructive = ::clearDestinationMarker
         )
@@ -1745,6 +1751,8 @@ class MainActivity : AppCompatActivity() {
         point: GeoPoint,
         primaryText: String?,
         onPrimary: (() -> Unit)?,
+        secondaryText: String?,
+        onSecondary: (() -> Unit)?,
         destructiveText: String?,
         onDestructive: (() -> Unit)?
     ) {
@@ -1796,6 +1804,24 @@ class MainActivity : AppCompatActivity() {
                     )
                 })
             }
+            if (secondaryText != null && onSecondary != null) {
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = secondaryText
+                    isAllCaps = false
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                    elevation = 0f
+                    stateListAnimator = null
+                    setOnClickListener {
+                        sheet.dismiss()
+                        onSecondary()
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(52)
+                    ).apply { topMargin = dp(6) }
+                })
+            }
             if (destructiveText != null && onDestructive != null) {
                 addView(MaterialButton(this@MainActivity).apply {
                     text = destructiveText
@@ -1823,6 +1849,37 @@ class MainActivity : AppCompatActivity() {
             bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
         }
         sheet.show()
+    }
+
+    private fun showSavePointDialog(point: GeoPoint) {
+        val defaultName = SavedPointStore.defaultPointName(System.currentTimeMillis())
+        val input = EditText(this).apply {
+            setText(defaultName)
+            hint = getString(R.string.point_name)
+            selectAll()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        }
+        val container = FrameLayout(this).apply {
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(input)
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.save_point)
+            .setView(container)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.save) { _, _ ->
+                val savedPoint = savedPointStore.savePoint(input.text.toString().trim(), point)
+                showSnackbar(getString(R.string.point_saved, savedPoint.name))
+                if (currentSection == Section.POINTS) showPointsScreen()
+            }
+            .show()
+        input.post {
+            input.requestFocus()
+            input.selectAll()
+            val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     private fun showDestinationDimOverlay() {
@@ -2013,6 +2070,42 @@ class MainActivity : AppCompatActivity() {
         TabLayoutMediator(tabs, pager) { tab, position ->
             tab.text = pages[position].title
         }.attach()
+    }
+
+    private fun showPointsScreen() {
+        currentSection = Section.POINTS
+        val points = savedPointStore.loadPoints()
+        showSection(getString(R.string.points))
+        setSectionContentPadding(horizontalDp = 20)
+
+        if (points.isEmpty()) {
+            sectionContent.addView(emptyStateText(getString(R.string.no_saved_points)))
+            return
+        }
+
+        points.forEach { point ->
+            sectionContent.addView(savedPointCard(point))
+        }
+    }
+
+    private fun savedPointCard(point: SavedPoint): View {
+        return contentCard().apply {
+            addView(TextView(this@MainActivity).apply {
+                text = point.name
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 17f
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.destination_distance, distanceToPoint(point.toGeoPoint()))
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(4) }
+            })
+        }
     }
 
     private fun showToolsScreen() {
@@ -2246,6 +2339,7 @@ class MainActivity : AppCompatActivity() {
         val session = sessionStore.current()
         if (session == null) {
             sectionContent.addView(profileStatusCard(getString(R.string.sign_in_for_sync)))
+            sectionContent.addView(statisticsEntryCard())
             sectionContent.addView(primaryFullWidthButton(getString(R.string.sign_in)) {
                 showAuthEntry()
             })
@@ -2260,6 +2354,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         sectionContent.addView(profileStatusCard(session.email ?: session.userId, onEdit = null))
+        sectionContent.addView(statisticsEntryCard())
         sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
         })
@@ -2312,6 +2407,7 @@ class MainActivity : AppCompatActivity() {
         sectionContent.addView(profileStatusCard(profile.displayName, profile.email, onEdit = {
             showEditMyProfileDialog(profile)
         }))
+        sectionContent.addView(statisticsEntryCard())
         sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
         })
@@ -2526,6 +2622,57 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.location_broadcast_8_hours) to 8 * 60 * 60_000L,
             getString(R.string.location_broadcast_until_manual_option) to null
         )
+    }
+
+    private fun statisticsEntryCard(): View {
+        return MaterialCardView(this).apply {
+            radius = dp(8).toFloat()
+            cardElevation = 0f
+            strokeWidth = 0
+            setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.icu_card_surface))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showStatisticsScreen() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(12)
+            }
+
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+                addView(ImageView(this@MainActivity).apply {
+                    setImageResource(R.drawable.ic_stats)
+                    imageTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+                    layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+                        rightMargin = dp(12)
+                    }
+                    setPadding(dp(7), dp(7), dp(7), dp(7))
+                })
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(this@MainActivity).apply {
+                        text = getString(R.string.statistics)
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                        textSize = 17f
+                        typeface = Typeface.DEFAULT_BOLD
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = getString(R.string.statistics_profile_subtitle)
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                        textSize = 13f
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { topMargin = dp(2) }
+                    })
+                })
+            })
+        }
     }
 
     private fun requestStartLocationBroadcast(durationMs: Long?) {
@@ -4116,6 +4263,7 @@ class MainActivity : AppCompatActivity() {
         NONE,
         TRACKS,
         STATISTICS,
+        POINTS,
         SETTINGS,
         PROFILE,
         AUTH
