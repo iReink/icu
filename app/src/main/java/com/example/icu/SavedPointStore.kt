@@ -11,7 +11,8 @@ data class SavedPoint(
     val name: String,
     val latitude: Double,
     val longitude: Double,
-    val createdAtMillis: Long
+    val createdAtMillis: Long,
+    val visible: Boolean
 ) {
     fun toGeoPoint(): GeoPoint = GeoPoint(latitude, longitude)
 }
@@ -30,7 +31,8 @@ class SavedPointStore(context: Context) {
                     name = item.getString("name"),
                     latitude = item.getDouble("latitude"),
                     longitude = item.getDouble("longitude"),
-                    createdAtMillis = item.getLong("createdAtMillis")
+                    createdAtMillis = item.getLong("createdAtMillis"),
+                    visible = item.optBoolean("visible", true)
                 )
             }.sortedByDescending { it.createdAtMillis }
         }.getOrDefault(emptyList())
@@ -43,13 +45,30 @@ class SavedPointStore(context: Context) {
             name = name.ifBlank { defaultPointName(now) },
             latitude = point.latitude,
             longitude = point.longitude,
-            createdAtMillis = now
+            createdAtMillis = now,
+            visible = true
         )
         save(loadPoints() + savedPoint)
         return savedPoint
     }
 
-    private fun save(points: List<SavedPoint>) {
+    fun renamePoint(point: SavedPoint, name: String): SavedPoint {
+        val updated = point.copy(name = name.ifBlank { point.name })
+        save(loadPoints().map { if (it.id == point.id) updated else it })
+        return updated
+    }
+
+    fun setPointVisibility(point: SavedPoint, visible: Boolean): SavedPoint {
+        val updated = point.copy(visible = visible)
+        save(loadPoints().map { if (it.id == point.id) updated else it })
+        return updated
+    }
+
+    fun deletePoint(point: SavedPoint) {
+        save(loadPoints().filterNot { it.id == point.id })
+    }
+
+    fun save(points: List<SavedPoint>) {
         val array = JSONArray()
         points.sortedByDescending { it.createdAtMillis }.forEach { point ->
             array.put(JSONObject()
@@ -58,6 +77,7 @@ class SavedPointStore(context: Context) {
                 .put("latitude", point.latitude)
                 .put("longitude", point.longitude)
                 .put("createdAtMillis", point.createdAtMillis)
+                .put("visible", point.visible)
             )
         }
         prefs.edit().putString(KEY_POINTS, array.toString()).apply()

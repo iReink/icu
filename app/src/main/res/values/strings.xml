@@ -21,6 +21,10 @@
     <string name="point_name">Название точки</string>
     <string name="point_saved">Точка сохранена: %1$s</string>
     <string name="no_saved_points">Пока нет сохранённых точек</string>
+    <string name="point_actions">Действия с точкой</string>
+    <string name="rename_point">Переименовать точку</string>
+    <string name="delete_point_title">Удалить точку?</string>
+    <string name="delete_point_message">Точка будет удалена из приложения и с карты.</string>
     <string name="statistics">Статистика</string>
     <string name="statistics_profile_subtitle">Километраж, календарь активности и графики</string>
     <string name="settings">Инструменты</string>

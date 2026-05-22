@@ -135,6 +135,7 @@ class MainActivity : AppCompatActivity() {
     private var highlightedFriendshipId: String? = null
     private var savedTrackOverlays = mutableListOf<Overlay>()
     private var visibleSavedTracks: List<RecordedTrack> = emptyList()
+    private var savedPointOverlays = mutableListOf<Overlay>()
     private var friendLocationOverlays = mutableListOf<Overlay>()
     private var destinationMarker: Marker? = null
     private var destinationDimOverlay: ReticleDimOverlay? = null
@@ -280,6 +281,7 @@ class MainActivity : AppCompatActivity() {
             locationOverlay?.enableFollowLocation()
         }
         loadSavedTracksAsync()
+        loadSavedPointsOnMap()
         syncRecordingState()
         findViewById<View>(R.id.mainContent).postDelayed({
             syncTracksSilently()
@@ -1871,6 +1873,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.save) { _, _ ->
                 val savedPoint = savedPointStore.savePoint(input.text.toString().trim(), point)
                 showSnackbar(getString(R.string.point_saved, savedPoint.name))
+                loadSavedPointsOnMap()
                 if (currentSection == Section.POINTS) showPointsScreen()
             }
             .show()
@@ -1938,6 +1941,48 @@ class MainActivity : AppCompatActivity() {
         destinationMarker?.let { map.overlays.remove(it) }
         destinationMarker = null
         map.invalidate()
+    }
+
+    private fun loadSavedPointsOnMap() {
+        savedPointOverlays.forEach { map.overlays.remove(it) }
+        savedPointOverlays.clear()
+        savedPointStore.loadPoints()
+            .filter { it.visible }
+            .forEach { point ->
+                val marker = Marker(map).apply {
+                    position = point.toGeoPoint()
+                    title = point.name
+                    icon = BitmapDrawable(resources, createSavedPointIcon())
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    setOnMarkerClickListener { _, _ ->
+                        showDestinationDetailsSheet(point.toGeoPoint())
+                        true
+                    }
+                }
+                savedPointOverlays.add(marker)
+                map.overlays.add(marker)
+            }
+        map.invalidate()
+    }
+
+    private fun createSavedPointIcon(): Bitmap {
+        val size = dp(34)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val center = size / 2f
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.WHITE
+        canvas.drawCircle(center, center, dp(10).toFloat(), paint)
+        paint.color = Color.rgb(214, 38, 42)
+        canvas.drawCircle(center, center, dp(6).toFloat(), paint)
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = dp(2).toFloat()
+        paint.color = Color.rgb(60, 47, 47)
+        canvas.drawLine(center, center + dp(9), center, size - dp(2).toFloat(), paint)
+        return bitmap
     }
 
     private fun createDestinationFlagIcon(): Bitmap {
@@ -2089,23 +2134,142 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun savedPointCard(point: SavedPoint): View {
-        return contentCard().apply {
-            addView(TextView(this@MainActivity).apply {
-                text = point.name
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
-                textSize = 17f
-                typeface = Typeface.DEFAULT_BOLD
-            })
-            addView(TextView(this@MainActivity).apply {
-                text = getString(R.string.destination_distance, distanceToPoint(point.toGeoPoint()))
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
-                textSize = 14f
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(4) }
+        return MaterialCardView(this).apply {
+            radius = dp(8).toFloat()
+            cardElevation = 0f
+            strokeWidth = 0
+            setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.icu_card_surface))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showSavedPointOnMap(point) }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(10) }
+
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), dp(12), dp(8), dp(12))
+
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(this@MainActivity).apply {
+                        text = point.name
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                        textSize = 17f
+                        typeface = Typeface.DEFAULT_BOLD
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = getString(R.string.destination_distance, distanceToPoint(point.toGeoPoint()))
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                        textSize = 14f
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { topMargin = dp(4) }
+                    })
+                    if (!point.visible) {
+                        addView(TextView(this@MainActivity).apply {
+                            text = getString(R.string.hidden_on_map)
+                            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                            alpha = 0.72f
+                            textSize = 12f
+                            layoutParams = LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { topMargin = dp(4) }
+                        })
+                    }
+                })
+
+                addView(MaterialButton(this@MainActivity).apply {
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                    background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
+                    elevation = 0f
+                    stateListAnimator = null
+                    minWidth = 0
+                    minimumWidth = 0
+                    minimumHeight = dp(40)
+                    setPadding(0, 0, 0, 0)
+                    contentDescription = getString(R.string.point_actions)
+                    setIconResource(R.drawable.ic_kebab_vertical)
+                    iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+                    iconPadding = 0
+                    setOnClickListener { anchor -> showPointMenu(anchor, point) }
+                    layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+                })
             })
         }
+    }
+
+    private fun showSavedPointOnMap(point: SavedPoint) {
+        hideSection()
+        bottomNavigation.selectedItemId = R.id.navMap
+        map.controller.animateTo(point.toGeoPoint())
+    }
+
+    private fun showPointMenu(anchor: View, point: SavedPoint) {
+        PopupMenu(this, anchor).apply {
+            menu.add(0, POINT_ACTION_RENAME, 0, R.string.rename)
+            menu.add(
+                0,
+                POINT_ACTION_VISIBILITY,
+                1,
+                if (point.visible) R.string.hide_from_map else R.string.show_on_map
+            )
+            menu.add(0, POINT_ACTION_DELETE, 2, R.string.delete)
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    POINT_ACTION_RENAME -> showRenamePointDialog(point)
+                    POINT_ACTION_VISIBILITY -> {
+                        savedPointStore.setPointVisibility(point, !point.visible)
+                        loadSavedPointsOnMap()
+                        showPointsScreen()
+                    }
+                    POINT_ACTION_DELETE -> showDeletePointDialog(point)
+                }
+                true
+            }
+            show()
+        }
+    }
+
+    private fun showRenamePointDialog(point: SavedPoint) {
+        val input = EditText(this).apply {
+            setText(point.name)
+            selectAll()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        }
+        val container = FrameLayout(this).apply {
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(input)
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.rename_point)
+            .setView(container)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.save) { _, _ ->
+                savedPointStore.renamePoint(point, input.text.toString().trim())
+                loadSavedPointsOnMap()
+                showPointsScreen()
+            }
+            .show()
+    }
+
+    private fun showDeletePointDialog(point: SavedPoint) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.delete_point_title)
+            .setMessage(R.string.delete_point_message)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.delete) { _, _ ->
+                savedPointStore.deletePoint(point)
+                loadSavedPointsOnMap()
+                showPointsScreen()
+            }
+            .show()
     }
 
     private fun showToolsScreen() {
@@ -4328,6 +4492,9 @@ class MainActivity : AppCompatActivity() {
         private const val TRACK_ACTION_RENAME = 1
         private const val TRACK_ACTION_VISIBILITY = 2
         private const val TRACK_ACTION_DELETE = 3
+        private const val POINT_ACTION_RENAME = 4
+        private const val POINT_ACTION_VISIBILITY = 5
+        private const val POINT_ACTION_DELETE = 6
         private const val FRIEND_ACTION_RENAME = 8
         private const val FRIEND_ACTION_RESET_NAME = 9
         private const val FRIEND_ACTION_SHARE = 10
