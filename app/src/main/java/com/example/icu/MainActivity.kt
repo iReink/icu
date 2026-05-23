@@ -27,14 +27,17 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
 import android.text.InputType
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.TextWatcher
 import android.text.method.PasswordTransformationMethod
 import android.text.style.BulletSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -58,11 +61,13 @@ import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.datepicker.MaterialDatePicker
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.radiobutton.MaterialRadioButton
@@ -168,6 +173,9 @@ class MainActivity : AppCompatActivity() {
     private var friendTooltip: PopupWindow? = null
     private var infoTooltip: PopupWindow? = null
     private var savedTracksLoadRequest = 0
+    private var selectedTrackListTab = 0
+    private var trackSearchQuery = ""
+    private var pointSearchQuery = ""
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
 
     private val foregroundLocationListener = LocationListener { location ->
@@ -525,6 +533,12 @@ class MainActivity : AppCompatActivity() {
     private fun handleSectionBack() {
         if (currentSection == Section.AUTH && currentAuthStep == AuthStep.PASSWORD) {
             showAuthEmailScreen()
+            return
+        }
+        if (currentSection == Section.STATISTICS) {
+            hideKeyboard()
+            bottomNavigation.selectedItemId = R.id.navProfile
+            showProfileScreen()
             return
         }
         hideKeyboard()
@@ -2329,6 +2343,16 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
+        lateinit var renderTrackTab: (Int) -> Unit
+        val searchInput = searchField(
+            hint = getString(R.string.search_tracks),
+            includeCalendar = true,
+            initialValue = trackSearchQuery,
+            onCalendarClick = { input -> showTrackDatePicker(input) }
+        ) { value ->
+            trackSearchQuery = value
+            renderTrackTab(selectedTrackListTab)
+        }
         val listHost = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -2336,11 +2360,13 @@ class MainActivity : AppCompatActivity() {
             )
         }
         sectionContent.addView(tabs)
+        sectionContent.addView(searchInput.first)
         sectionContent.addView(listHost)
         pages.forEach { page -> tabs.addTab(tabs.newTab().setText(page.title)) }
-        fun renderTrackTab(position: Int) {
+        renderTrackTab = { position ->
+            selectedTrackListTab = position
             listHost.removeAllViews()
-            listHost.addView(tracksPageView(pages[position].type, tracks))
+            listHost.addView(tracksPageView(pages[position].type, tracks, trackSearchQuery))
         }
         tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
@@ -2350,11 +2376,14 @@ class MainActivity : AppCompatActivity() {
             override fun onTabUnselected(tab: TabLayout.Tab) = Unit
             override fun onTabReselected(tab: TabLayout.Tab) = Unit
         })
-        renderTrackTab(0)
+        tabs.getTabAt(selectedTrackListTab.coerceIn(0, pages.lastIndex))?.select()
+        renderTrackTab(selectedTrackListTab.coerceIn(0, pages.lastIndex))
     }
 
-    private fun tracksPageView(type: TrackType, tracks: List<RecordedTrack>): View {
-        val pageTracks = tracks.filter { it.type == type }
+    private fun tracksPageView(type: TrackType, tracks: List<RecordedTrack>, query: String = ""): View {
+        val pageTracks = tracks
+            .filter { it.type == type }
+            .filter { trackMatchesQuery(it, query) }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), 0, dp(20), dp(32))
@@ -2372,8 +2401,48 @@ class MainActivity : AppCompatActivity() {
                 monthTracks.sortedByDescending { it.startedAtMillis }.forEach { track ->
                     content.addView(trackCard(track))
                 }
-            }
+        }
         return content
+    }
+
+    private fun trackMatchesQuery(track: RecordedTrack, query: String): Boolean {
+        val normalizedQuery = query.trim().lowercase(Locale.forLanguageTag("ru-RU"))
+        if (normalizedQuery.isBlank()) return true
+        val day = DateTimeFormatter
+            .ofPattern("d MMMM yyyy", Locale.forLanguageTag("ru-RU"))
+            .withZone(ZoneId.systemDefault())
+            .format(Instant.ofEpochMilli(track.startedAtMillis))
+        val compactDay = DateTimeFormatter
+            .ofPattern("dd.MM.yyyy", Locale.forLanguageTag("ru-RU"))
+            .withZone(ZoneId.systemDefault())
+            .format(Instant.ofEpochMilli(track.startedAtMillis))
+        val haystack = listOf(
+            track.name,
+            track.type.title,
+            formatTrackDate(track.startedAtMillis),
+            day,
+            compactDay,
+            GpxTrackStore.monthKey(track).toString()
+        ).joinToString(" ").lowercase(Locale.forLanguageTag("ru-RU"))
+        return haystack.contains(normalizedQuery)
+    }
+
+    private fun showTrackDatePicker(input: TextInputEditText) {
+        val picker = MaterialDatePicker.Builder.datePicker()
+            .setTitleText(getString(R.string.pick_track_date))
+            .setSelection(MaterialDatePicker.todayInUtcMilliseconds())
+            .build()
+        picker.addOnPositiveButtonClickListener { selection ->
+            val selectedDate = Instant.ofEpochMilli(selection)
+                .atZone(ZoneId.of("UTC"))
+                .toLocalDate()
+            val formatted = selectedDate.format(
+                DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.forLanguageTag("ru-RU"))
+            )
+            input.setText(formatted)
+            input.setSelection(input.text?.length ?: 0)
+        }
+        picker.show(supportFragmentManager, "track_date_picker")
     }
 
     private fun showStatisticsScreen() {
@@ -2414,16 +2483,65 @@ class MainActivity : AppCompatActivity() {
         currentSection = Section.POINTS
         val points = savedPointStore.loadPoints()
         showSection(getString(R.string.points))
-        setSectionContentPadding(horizontalDp = 20)
+        setSectionContentPadding(horizontalDp = 0)
 
-        if (points.isEmpty()) {
-            sectionContent.addView(emptyStateText(getString(R.string.no_saved_points)))
-            return
+        lateinit var renderPoints: () -> Unit
+        val searchInput = searchField(
+            hint = getString(R.string.search_points),
+            includeCalendar = false,
+            initialValue = pointSearchQuery
+        ) { value ->
+            pointSearchQuery = value
+            renderPoints()
         }
+        val listHost = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        sectionContent.addView(searchInput.first)
+        sectionContent.addView(listHost)
 
-        points.forEach { point ->
-            sectionContent.addView(savedPointCard(point))
+        renderPoints = render@{
+            listHost.removeAllViews()
+            if (points.isEmpty()) {
+                listHost.addView(emptyStateText(getString(R.string.no_saved_points)))
+                return@render
+            }
+            val filteredPoints = points.filter { point ->
+                pointSearchQuery.isBlank() ||
+                    point.name.lowercase(Locale.forLanguageTag("ru-RU"))
+                        .contains(pointSearchQuery.trim().lowercase(Locale.forLanguageTag("ru-RU")))
+            }
+            if (filteredPoints.isEmpty()) {
+                listHost.addView(emptyStateText(getString(R.string.no_saved_points)))
+                return@render
+            }
+
+            val recyclerView = RecyclerView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    (resources.displayMetrics.heightPixels - dp(190)).coerceAtLeast(dp(420))
+                )
+                setPadding(dp(20), 0, dp(20), dp(32))
+                clipToPadding = false
+                itemAnimator = null
+            }
+            val adapter = SavedPointAdapter(filteredPoints.toMutableList())
+            recyclerView.adapter = adapter
+            if (pointSearchQuery.isBlank()) {
+                val callback = SavedPointDragCallback(adapter)
+                val touchHelper = ItemTouchHelper(callback)
+                touchHelper.attachToRecyclerView(recyclerView)
+                adapter.dragStarter = { holder ->
+                    holder.itemView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    touchHelper.startDrag(holder)
+                }
+            }
+            listHost.addView(recyclerView)
         }
+        renderPoints()
     }
 
     private fun savedPointCard(point: SavedPoint): View {
@@ -2813,7 +2931,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        sectionContent.addView(profileStatusCard(session.email ?: session.userId, onEdit = null))
+        sectionContent.addView(profileStatusCard(
+            textValue = session.email ?: session.userId,
+            onSignOut = ::signOut
+        ))
         sectionContent.addView(statisticsEntryCard())
         sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
@@ -2822,9 +2943,6 @@ class MainActivity : AppCompatActivity() {
         sectionContent.addView(locationBroadcastRow())
         sectionContent.addView(emptyStateText(getString(R.string.loading)))
         loadProfileAndFriends(force = true, showErrors = true)
-        sectionContent.addView(destructiveGhostButton(getString(R.string.sign_out)) {
-            signOut()
-        })
     }
 
     private fun loadProfileAndFriends(force: Boolean = false, showErrors: Boolean = false) {
@@ -2864,9 +2982,12 @@ class MainActivity : AppCompatActivity() {
     private fun renderProfileWithFriends(profile: UserProfile, friends: List<FriendProfile>) {
         sectionContent.removeAllViews()
         setSectionContentPadding(horizontalDp = 20)
-        sectionContent.addView(profileStatusCard(profile.displayName, profile.email, onEdit = {
-            showEditMyProfileDialog(profile)
-        }))
+        sectionContent.addView(profileStatusCard(
+            textValue = profile.displayName,
+            subtitle = profile.email,
+            onEdit = { showEditMyProfileDialog(profile) },
+            onSignOut = ::signOut
+        ))
         sectionContent.addView(statisticsEntryCard())
         sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
@@ -2886,9 +3007,6 @@ class MainActivity : AppCompatActivity() {
                 if (currentSection == Section.PROFILE) showProfileScreen()
             }, FRIEND_HIGHLIGHT_DURATION_MS)
         }
-        sectionContent.addView(destructiveGhostButton(getString(R.string.sign_out)) {
-            signOut()
-        })
     }
 
     private fun signOut() {
@@ -3422,7 +3540,7 @@ class MainActivity : AppCompatActivity() {
         sectionContent.removeAllViews()
         authRootView = null
         findViewById<MaterialButton>(R.id.closeSectionButton).visibility =
-            if (currentSection == Section.AUTH) View.VISIBLE else View.INVISIBLE
+            if (currentSection == Section.AUTH || currentSection == Section.STATISTICS) View.VISIBLE else View.INVISIBLE
         sectionPanel.visibility = View.VISIBLE
         addTrackFab.visibility = View.GONE
         myLocationButton.visibility = View.GONE
@@ -3456,6 +3574,49 @@ class MainActivity : AppCompatActivity() {
                 bottomMargin = dp(10)
             }
         }
+    }
+
+    private fun searchField(
+        hint: String,
+        includeCalendar: Boolean,
+        initialValue: String,
+        onCalendarClick: ((TextInputEditText) -> Unit)? = null,
+        onQueryChanged: (String) -> Unit
+    ): Pair<TextInputLayout, TextInputEditText> {
+        val input = TextInputEditText(this).apply {
+            setText(initialValue)
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val layout = TextInputLayout(this).apply {
+            this.hint = hint
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            setStartIconDrawable(R.drawable.ic_search)
+            if (includeCalendar) {
+                endIconMode = TextInputLayout.END_ICON_CUSTOM
+                setEndIconDrawable(R.drawable.ic_calendar)
+                setEndIconContentDescription(R.string.pick_track_date)
+                setEndIconOnClickListener { onCalendarClick?.invoke(input) }
+            }
+            addView(input)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                leftMargin = dp(20)
+                topMargin = dp(12)
+                rightMargin = dp(20)
+                bottomMargin = dp(12)
+            }
+        }
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                onQueryChanged(s?.toString().orEmpty())
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        return layout to input
     }
 
     private fun trackCard(track: RecordedTrack): View {
@@ -4006,40 +4167,70 @@ class MainActivity : AppCompatActivity() {
     private fun profileStatusCard(
         textValue: String,
         subtitle: String? = null,
-        onEdit: (() -> Unit)? = null
+        onEdit: (() -> Unit)? = null,
+        onSignOut: (() -> Unit)? = null
     ): View {
         return contentCard().apply {
-            addView(cardTitle(getString(R.string.profile), ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink)))
-            addView(TextView(this@MainActivity).apply {
-                text = textValue
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
-                textSize = 16f
-                typeface = Typeface.DEFAULT_BOLD
-            })
-            subtitle?.takeIf { it.isNotBlank() }?.let { value ->
-                addView(TextView(this@MainActivity).apply {
-                    text = value
-                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
-                    textSize = 14f
-                })
-            }
-            onEdit?.let { action ->
-                addView(MaterialButton(this@MainActivity).apply {
-                    text = getString(R.string.edit_name)
-                    isAllCaps = false
-                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
-                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
-                    elevation = 0f
-                    stateListAnimator = null
-                    setOnClickListener { action() }
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        dp(44)
-                    ).apply {
-                        topMargin = dp(8)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(this@MainActivity).apply {
+                        text = textValue
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                        textSize = 17f
+                        typeface = Typeface.DEFAULT_BOLD
+                    })
+                    subtitle?.takeIf { it.isNotBlank() }?.let { value ->
+                        addView(TextView(this@MainActivity).apply {
+                            text = value
+                            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                            textSize = 14f
+                            layoutParams = LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { topMargin = dp(2) }
+                        })
                     }
                 })
+
+                if (onEdit != null || onSignOut != null) {
+                    addView(MaterialButton(this@MainActivity).apply {
+                        backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                        background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
+                        elevation = 0f
+                        stateListAnimator = null
+                        minWidth = 0
+                        minimumWidth = 0
+                        minimumHeight = dp(40)
+                        setPadding(0, 0, 0, 0)
+                        contentDescription = getString(R.string.profile_actions)
+                        setIconResource(R.drawable.ic_kebab_vertical)
+                        iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+                        iconPadding = 0
+                        setOnClickListener { anchor -> showProfileMenu(anchor, onEdit, onSignOut) }
+                        layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+                    })
+                }
+            })
+        }
+    }
+
+    private fun showProfileMenu(anchor: View, onEdit: (() -> Unit)?, onSignOut: (() -> Unit)?) {
+        PopupMenu(this, anchor).apply {
+            onEdit?.let { menu.add(0, PROFILE_ACTION_EDIT, 0, R.string.edit_name) }
+            onSignOut?.let { menu.add(0, PROFILE_ACTION_SIGN_OUT, 1, R.string.sign_out) }
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    PROFILE_ACTION_EDIT -> onEdit?.invoke()
+                    PROFILE_ACTION_SIGN_OUT -> onSignOut?.invoke()
+                }
+                true
             }
+            show()
         }
     }
 
@@ -4773,7 +4964,96 @@ class MainActivity : AppCompatActivity() {
         override fun getItemCount(): Int = pages.size
     }
 
+    private inner class SavedPointAdapter(
+        private val points: MutableList<SavedPoint>
+    ) : RecyclerView.Adapter<SavedPointHolder>() {
+        var dragStarter: ((SavedPointHolder) -> Unit)? = null
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): SavedPointHolder {
+            val container = FrameLayout(parent.context).apply {
+                layoutParams = RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            return SavedPointHolder(container)
+        }
+
+        override fun onBindViewHolder(holder: SavedPointHolder, position: Int) {
+            holder.container.removeAllViews()
+            val card = savedPointCard(points[position]).apply {
+                setOnLongClickListener {
+                    dragStarter?.invoke(holder)
+                    dragStarter != null
+                }
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dp(10)
+                }
+            }
+            holder.container.addView(card)
+        }
+
+        override fun getItemCount(): Int = points.size
+
+        fun move(from: Int, to: Int): Boolean {
+            if (from !in points.indices || to !in points.indices) return false
+            val item = points.removeAt(from)
+            points.add(to, item)
+            notifyItemMoved(from, to)
+            return true
+        }
+
+        fun currentPoints(): List<SavedPoint> = points.toList()
+    }
+
+    private inner class SavedPointDragCallback(
+        private val adapter: SavedPointAdapter
+    ) : ItemTouchHelper.Callback() {
+        override fun getMovementFlags(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder): Int {
+            return makeMovementFlags(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0)
+        }
+
+        override fun onMove(
+            recyclerView: RecyclerView,
+            viewHolder: RecyclerView.ViewHolder,
+            target: RecyclerView.ViewHolder
+        ): Boolean {
+            return adapter.move(viewHolder.bindingAdapterPosition, target.bindingAdapterPosition)
+        }
+
+        override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) = Unit
+
+        override fun isLongPressDragEnabled(): Boolean = false
+
+        override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
+            super.onSelectedChanged(viewHolder, actionState)
+            if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) {
+                viewHolder?.itemView?.animate()
+                    ?.translationZ(dp(10).toFloat())
+                    ?.rotation(1.5f)
+                    ?.setDuration(120L)
+                    ?.start()
+            }
+        }
+
+        override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
+            super.clearView(recyclerView, viewHolder)
+            viewHolder.itemView.animate()
+                .translationZ(0f)
+                .rotation(0f)
+                .setDuration(140L)
+                .start()
+            savedPointStore.reorderPoints(adapter.currentPoints())
+            syncTracksSilently()
+            loadSavedPointsOnMap()
+        }
+    }
+
     private class StatsPageHolder(val container: FrameLayout) : RecyclerView.ViewHolder(container)
+    private class SavedPointHolder(val container: FrameLayout) : RecyclerView.ViewHolder(container)
 
     companion object {
         private const val TRACK_ACTION_RENAME = 1
@@ -4786,6 +5066,8 @@ class MainActivity : AppCompatActivity() {
         private const val FRIEND_ACTION_RESET_NAME = 9
         private const val FRIEND_ACTION_SHARE = 10
         private const val FRIEND_ACTION_DELETE = 11
+        private const val PROFILE_ACTION_EDIT = 12
+        private const val PROFILE_ACTION_SIGN_OUT = 13
         private const val TRACK_STROKE_WIDTH = 8f
         private const val TRACK_FOCUS_STROKE_WIDTH = 12f
         private const val TRACK_FOCUS_HALO_WIDTH = 26f

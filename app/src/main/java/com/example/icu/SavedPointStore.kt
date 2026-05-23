@@ -13,6 +13,7 @@ data class SavedPoint(
     val longitude: Double,
     val createdAtMillis: Long,
     val updatedAtMillis: Long,
+    val sortOrder: Long,
     val visible: Boolean
 ) {
     fun toGeoPoint(): GeoPoint = GeoPoint(latitude, longitude)
@@ -34,9 +35,10 @@ class SavedPointStore(context: Context) {
                     longitude = item.getDouble("longitude"),
                     createdAtMillis = item.getLong("createdAtMillis"),
                     updatedAtMillis = item.optLong("updatedAtMillis", item.getLong("createdAtMillis")),
+                    sortOrder = item.optLong("sortOrder", -item.getLong("createdAtMillis")),
                     visible = item.optBoolean("visible", true)
                 )
-            }.sortedByDescending { it.createdAtMillis }
+            }.sortedWith(compareBy<SavedPoint> { it.sortOrder }.thenByDescending { it.createdAtMillis })
         }.getOrDefault(emptyList())
     }
 
@@ -49,6 +51,7 @@ class SavedPointStore(context: Context) {
             longitude = point.longitude,
             createdAtMillis = now,
             updatedAtMillis = now,
+            sortOrder = (loadPoints().minOfOrNull { it.sortOrder } ?: 0L) - 1L,
             visible = true
         )
         save(loadPoints() + savedPoint)
@@ -78,6 +81,15 @@ class SavedPointStore(context: Context) {
         prefs.edit().putBoolean(deletedKey(point.id), true).apply()
     }
 
+    fun reorderPoints(orderedPoints: List<SavedPoint>) {
+        if (orderedPoints.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val updatedById = orderedPoints.mapIndexed { index, point ->
+            point.id to point.copy(sortOrder = index.toLong(), updatedAtMillis = now)
+        }.toMap()
+        save(loadPoints().map { updatedById[it.id] ?: it })
+    }
+
     fun upsertSyncedPoints(points: List<SavedPoint>) {
         if (points.isEmpty()) return
         val merged = loadPoints().associateBy { it.id }.toMutableMap()
@@ -102,7 +114,7 @@ class SavedPointStore(context: Context) {
 
     fun save(points: List<SavedPoint>) {
         val array = JSONArray()
-        points.sortedByDescending { it.createdAtMillis }.forEach { point ->
+        points.sortedWith(compareBy<SavedPoint> { it.sortOrder }.thenByDescending { it.createdAtMillis }).forEach { point ->
             array.put(JSONObject()
                 .put("id", point.id)
                 .put("name", point.name)
@@ -110,6 +122,7 @@ class SavedPointStore(context: Context) {
                 .put("longitude", point.longitude)
                 .put("createdAtMillis", point.createdAtMillis)
                 .put("updatedAtMillis", point.updatedAtMillis)
+                .put("sortOrder", point.sortOrder)
                 .put("visible", point.visible)
             )
         }

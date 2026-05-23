@@ -129,6 +129,7 @@ class SupabaseSyncManager(
             latitude = latitude,
             longitude = longitude,
             visible = visible,
+            sortOrder = sortOrder,
             createdAtMillis = createdAtMillis,
             updatedAtMillis = updatedAtMillis
         )
@@ -142,6 +143,7 @@ class SupabaseSyncManager(
             longitude = longitude,
             createdAtMillis = createdAtMillis,
             updatedAtMillis = updatedAtMillis,
+            sortOrder = sortOrder,
             visible = visible
         )
     }

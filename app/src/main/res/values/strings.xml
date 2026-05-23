@@ -21,6 +21,7 @@
     <string name="point_name">Название точки</string>
     <string name="point_saved">Точка сохранена: %1$s</string>
     <string name="no_saved_points">Пока нет сохранённых точек</string>
+    <string name="search_points">Поиск точек</string>
     <string name="point_emoji_hint">Используйте эмодзи в начале названия чтобы задать иконку на карте</string>
     <string name="point_actions">Действия с точкой</string>
     <string name="rename_point">Переименовать точку</string>
@@ -60,6 +61,8 @@
     <string name="delete_track_title">Удалить трек?</string>
     <string name="delete_track_message">Трек будет удалён из приложения и с карты.</string>
     <string name="no_tracks">Пока нет сохранённых треков</string>
+    <string name="search_tracks">Поиск треков</string>
+    <string name="pick_track_date">Выбрать дату</string>
     <string name="all_time">За всё время</string>
     <string name="this_month">Этот месяц</string>
     <string name="gpx_upload_mock">Загрузка GPX будет добавлена позже</string>
@@ -76,6 +79,7 @@
     <string name="signed_in_as">Синхронизация: %1$s</string>
     <string name="sync_now">Синхронизировать сейчас</string>
     <string name="sign_out">Выйти</string>
+    <string name="profile_actions">Действия профиля</string>
     <string name="email">Email</string>
     <string name="password">Пароль</string>
     <string name="checking_email">Проверяем email</string>

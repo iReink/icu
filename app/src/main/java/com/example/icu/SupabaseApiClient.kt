@@ -165,7 +165,7 @@ class SupabaseApiClient(
     fun fetchSavedPoints(session: SupabaseSession): List<RemoteSavedPoint> {
         val response = request(
             method = "GET",
-            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/saved_points?select=*&deleted_at=is.null&order=updated_at.desc",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/saved_points?select=*&deleted_at=is.null&order=sort_order.asc",
             headers = authHeaders(session)
         )
         val array = JSONArray(response.text)
@@ -432,6 +432,7 @@ class SupabaseApiClient(
             latitude = json.getDouble("latitude"),
             longitude = json.getDouble("longitude"),
             visible = json.optBoolean("visible", true),
+            sortOrder = json.optLong("sort_order", -Instant.parse(json.getString("created_at")).toEpochMilli()),
             createdAtMillis = Instant.parse(json.getString("created_at")).toEpochMilli(),
             updatedAtMillis = Instant.parse(json.getString("updated_at")).toEpochMilli()
         )
@@ -467,6 +468,7 @@ class SupabaseApiClient(
             .put("latitude", latitude)
             .put("longitude", longitude)
             .put("visible", visible)
+            .put("sort_order", sortOrder)
             .put("created_at", Instant.ofEpochMilli(createdAtMillis).toString())
             .put("updated_at", Instant.ofEpochMilli(updatedAtMillis).toString())
             .put("deleted_at", JSONObject.NULL)
@@ -562,6 +564,7 @@ data class RemoteSavedPoint(
     val latitude: Double,
     val longitude: Double,
     val visible: Boolean,
+    val sortOrder: Long,
     val createdAtMillis: Long,
     val updatedAtMillis: Long
 )
