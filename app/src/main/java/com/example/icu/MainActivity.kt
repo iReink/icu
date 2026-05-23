@@ -2197,18 +2197,28 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-        val pager = ViewPager2(this).apply {
-            adapter = TracksPagerAdapter(pages, tracks)
+        val listHost = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                (resources.displayMetrics.heightPixels - dp(154)).coerceAtLeast(dp(420))
+                ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
         sectionContent.addView(tabs)
-        sectionContent.addView(pager)
-        TabLayoutMediator(tabs, pager) { tab, position ->
-            tab.text = pages[position].title
-        }.attach()
+        sectionContent.addView(listHost)
+        pages.forEach { page -> tabs.addTab(tabs.newTab().setText(page.title)) }
+        fun renderTrackTab(position: Int) {
+            listHost.removeAllViews()
+            listHost.addView(tracksPageView(pages[position].type, tracks))
+        }
+        tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) {
+                renderTrackTab(tab.position)
+            }
+
+            override fun onTabUnselected(tab: TabLayout.Tab) = Unit
+            override fun onTabReselected(tab: TabLayout.Tab) = Unit
+        })
+        renderTrackTab(0)
     }
 
     private fun tracksPageView(type: TrackType, tracks: List<RecordedTrack>): View {
@@ -2220,10 +2230,7 @@ class MainActivity : AppCompatActivity() {
 
         if (pageTracks.isEmpty()) {
             content.addView(emptyStateText(getString(R.string.no_tracks)))
-            return ScrollView(this).apply {
-                isFillViewport = true
-                addView(content)
-            }
+            return content
         }
 
         pageTracks.groupBy { GpxTrackStore.monthKey(it) }
@@ -2234,10 +2241,7 @@ class MainActivity : AppCompatActivity() {
                     content.addView(trackCard(track))
                 }
             }
-        return ScrollView(this).apply {
-            isFillViewport = true
-            addView(content)
-        }
+        return content
     }
 
     private fun showStatisticsScreen() {
@@ -4638,30 +4642,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private class StatsPageHolder(val container: FrameLayout) : RecyclerView.ViewHolder(container)
-
-    private inner class TracksPagerAdapter(
-        private val pages: List<TrackListPage>,
-        private val tracks: List<RecordedTrack>
-    ) : RecyclerView.Adapter<TracksPageHolder>() {
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): TracksPageHolder {
-            val container = FrameLayout(parent.context).apply {
-                layoutParams = RecyclerView.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            }
-            return TracksPageHolder(container)
-        }
-
-        override fun onBindViewHolder(holder: TracksPageHolder, position: Int) {
-            holder.container.removeAllViews()
-            holder.container.addView(tracksPageView(pages[position].type, tracks))
-        }
-
-        override fun getItemCount(): Int = pages.size
-    }
-
-    private class TracksPageHolder(val container: FrameLayout) : RecyclerView.ViewHolder(container)
 
     companion object {
         private const val TRACK_ACTION_RENAME = 1
