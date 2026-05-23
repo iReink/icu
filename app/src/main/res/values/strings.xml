@@ -27,10 +27,13 @@
     <string name="rename_point">Переименовать точку</string>
     <string name="delete_point_title">Удалить точку?</string>
     <string name="delete_point_message">Точка будет удалена из приложения и с карты.</string>
+    <string name="delete_point_message_named">Точка «%1$s» будет удалена из приложения и с карты.</string>
     <string name="statistics">Статистика</string>
     <string name="statistics_profile_subtitle">Километраж, календарь активности и графики</string>
-    <string name="settings">Инструменты</string>
+    <string name="settings">Ещё</string>
     <string name="tools">Инструменты</string>
+    <string name="map_tools">Инструменты карты</string>
+    <string name="recording_settings">Запись треков</string>
     <string name="ruler_tool_title">Рулетка</string>
     <string name="ruler_tool_subtitle">Построение и измерение маршрута на карте</string>
     <string name="measurement_first_point">Выберите первую точку\nи нажмите плюс</string>
@@ -60,7 +63,9 @@
     <string name="undo">Отменить</string>
     <string name="delete_track_title">Удалить трек?</string>
     <string name="delete_track_message">Трек будет удалён из приложения и с карты.</string>
+    <string name="delete_track_message_named">Трек «%1$s» будет удалён из приложения и с карты.</string>
     <string name="no_tracks">Пока нет сохранённых треков</string>
+    <string name="no_search_results">Ничего не найдено</string>
     <string name="search_tracks">Поиск треков</string>
     <string name="pick_track_date">Выбрать дату</string>
     <string name="all_time">За всё время</string>
@@ -105,6 +110,9 @@
     <string name="sync_started">Синхронизация началась</string>
     <string name="sync_finished">Синхронизация завершена: выгружено %1$d, загружено %2$d</string>
     <string name="sync_failed">Не удалось синхронизировать: %1$s</string>
+    <string name="sync_in_progress">Синхронизация идёт…</string>
+    <string name="sync_status_synced">Синхронизировано %1$s</string>
+    <string name="sync_status_never">Синхронизация ещё не выполнялась</string>
     <string name="unsynced_track">Трек ещё не синхронизирован</string>
     <string name="map">Карта</string>
     <string name="profile">Профиль</string>
@@ -146,5 +154,7 @@
     <string name="updated_at_time">Обновлено в %1$s</string>
     <string name="updated_at_date_time">Обновлено %1$s в %2$s</string>
     <string name="delete_friend">Удалить из друзей</string>
+    <string name="delete_friend_title">Удалить друга?</string>
+    <string name="delete_friend_message">«%1$s» исчезнет из списка друзей, а вы перестанете видеть геопозицию друг друга.</string>
     <string name="no_friend_locations">Нет точек за последние сутки</string>
 </resources>

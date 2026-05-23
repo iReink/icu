@@ -68,6 +68,16 @@ class SyncMetadataStore(context: Context) {
         prefs.edit().remove(deletedRemoteKey(remoteId)).apply()
     }
 
+    fun lastSuccessfulSyncAtMillis(): Long {
+        return prefs.getLong(LAST_SUCCESSFUL_SYNC_AT, 0L)
+    }
+
+    fun markSuccessfulSync() {
+        prefs.edit()
+            .putLong(LAST_SUCCESSFUL_SYNC_AT, System.currentTimeMillis())
+            .apply()
+    }
+
     private fun remoteIdKey(fileName: String) = "file.$fileName.remote_id"
     private fun syncedModifiedKey(fileName: String) = "file.$fileName.synced_modified"
     private fun fileNameKey(remoteId: String) = "remote.$remoteId.file_name"
@@ -76,5 +86,6 @@ class SyncMetadataStore(context: Context) {
     companion object {
         private const val PREFS_NAME = "track_sync"
         private const val DELETED_PREFIX = "deleted."
+        private const val LAST_SUCCESSFUL_SYNC_AT = "last_successful_sync_at"
     }
 }

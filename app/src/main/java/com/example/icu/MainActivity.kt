@@ -63,6 +63,7 @@ import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -173,6 +174,7 @@ class MainActivity : AppCompatActivity() {
     private var lastProfileRefreshMillis = 0L
     private var friendLocationRefreshInFlight = false
     private var profileRefreshInFlight = false
+    private var syncInProgress = false
     private var friendTooltip: PopupWindow? = null
     private var infoTooltip: PopupWindow? = null
     private var savedTracksLoadRequest = 0
@@ -979,6 +981,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun syncTracks(showToast: Boolean) {
         if (sessionStore.current() == null) return
+        if (syncInProgress) return
+        syncInProgress = true
+        refreshProfileSyncStatusIfVisible()
         if (showToast) {
             showSnackbar(getString(R.string.sync_started))
         }
@@ -987,11 +992,13 @@ class MainActivity : AppCompatActivity() {
                 syncManager.sync()
             }.onSuccess { result ->
                 runOnUiThread {
+                    syncInProgress = false
                     updateAuthHeader()
                     loadSavedTracksAsync()
                     loadSavedPointsOnMap()
                     showTracksScreenIfVisible()
                     showPointsScreenIfVisible()
+                    refreshProfileSyncStatusIfVisible()
                     if (showToast) {
                         showSnackbar(
                             getString(R.string.sync_finished, result.uploaded, result.downloaded),
@@ -1001,6 +1008,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 runOnUiThread {
+                    syncInProgress = false
+                    refreshProfileSyncStatusIfVisible()
                     if (showToast) {
                         showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
                     }
@@ -2252,7 +2261,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun createSavedPointIcon(pointName: String): Bitmap {
         val emoji = leadingEmoji(pointName)
-        val size = dp(if (emoji != null) 42 else 34)
+        val size = dp(if (emoji != null) 38 else 30)
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -2261,28 +2270,28 @@ class MainActivity : AppCompatActivity() {
         if (emoji != null) {
             paint.style = Paint.Style.FILL
             paint.color = Color.WHITE
-            canvas.drawCircle(center, center, dp(18).toFloat(), paint)
+            canvas.drawCircle(center, center, dp(16).toFloat(), paint)
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = dp(2).toFloat()
             paint.color = ContextCompat.getColor(this, R.color.icu_purple_ink)
-            canvas.drawCircle(center, center, dp(18).toFloat() - paint.strokeWidth / 2f, paint)
+            canvas.drawCircle(center, center, dp(16).toFloat() - paint.strokeWidth / 2f, paint)
             paint.style = Paint.Style.FILL
             paint.color = Color.BLACK
             paint.textAlign = Paint.Align.CENTER
-            paint.textSize = dp(24).toFloat()
+            paint.textSize = dp(22).toFloat()
             val textY = center - (paint.descent() + paint.ascent()) / 2f
             canvas.drawText(emoji, center, textY, paint)
         } else {
             paint.style = Paint.Style.FILL
             paint.color = Color.WHITE
-            canvas.drawCircle(center, center, dp(10).toFloat(), paint)
+            canvas.drawCircle(center, center, dp(9).toFloat(), paint)
             paint.color = Color.rgb(214, 38, 42)
-            canvas.drawCircle(center, center, dp(6).toFloat(), paint)
+            canvas.drawCircle(center, center, dp(5).toFloat(), paint)
 
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = dp(2).toFloat()
             paint.color = Color.rgb(60, 47, 47)
-            canvas.drawLine(center, center + dp(9), center, size - dp(2).toFloat(), paint)
+            canvas.drawLine(center, center + dp(8), center, size - dp(2).toFloat(), paint)
         }
         return bitmap
     }
@@ -2421,7 +2430,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (pageTracks.isEmpty()) {
-            content.addView(emptyStateText(getString(R.string.no_tracks)))
+            val emptyText = if (query.isBlank()) R.string.no_tracks else R.string.no_search_results
+            content.addView(emptyStateText(getString(emptyText)))
             return content
         }
 
@@ -2546,7 +2556,7 @@ class MainActivity : AppCompatActivity() {
                         .contains(pointSearchQuery.trim().lowercase(Locale.forLanguageTag("ru-RU")))
             }
             if (filteredPoints.isEmpty()) {
-                listHost.addView(emptyStateText(getString(R.string.no_saved_points)))
+                listHost.addView(emptyStateText(getString(R.string.no_search_results)))
                 return@render
             }
 
@@ -2709,7 +2719,7 @@ class MainActivity : AppCompatActivity() {
     private fun showDeletePointDialog(point: SavedPoint) {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.delete_point_title)
-            .setMessage(R.string.delete_point_message)
+            .setMessage(getString(R.string.delete_point_message_named, point.name))
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.delete) { _, _ ->
                 savedPointStore.deletePoint(point)
@@ -2732,7 +2742,9 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
+            addView(toolSectionTitle(getString(R.string.map_tools)))
             addView(rulerToolRow())
+            addView(toolSectionTitle(getString(R.string.recording_settings)))
             addView(settingsRow())
             addView(View(this@MainActivity), LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -2756,6 +2768,22 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         })
+    }
+
+    private fun toolSectionTitle(title: String): View {
+        return TextView(this).apply {
+            text = title
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(4)
+                bottomMargin = dp(8)
+            }
+        }
     }
 
     private fun rulerToolRow(): View {
@@ -2970,11 +2998,12 @@ class MainActivity : AppCompatActivity() {
             textValue = session.email ?: session.userId,
             onSignOut = ::signOut
         ))
+        sectionContent.addView(syncStatusText())
         sectionContent.addView(statisticsEntryCard())
-        sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
+        sectionContent.addView(groupTitle(getString(R.string.friends)))
+        sectionContent.addView(tonalFullWidthButton(getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
         })
-        sectionContent.addView(groupTitle(getString(R.string.friends)))
         sectionContent.addView(locationBroadcastRow())
         sectionContent.addView(emptyStateText(getString(R.string.loading)))
         loadProfileAndFriends(force = true, showErrors = true)
@@ -3023,11 +3052,12 @@ class MainActivity : AppCompatActivity() {
             onEdit = { showEditMyProfileDialog(profile) },
             onSignOut = ::signOut
         ))
+        sectionContent.addView(syncStatusText())
         sectionContent.addView(statisticsEntryCard())
-        sectionContent.addView(primaryFullWidthButton(getString(R.string.add_friend_by_link)) {
+        sectionContent.addView(groupTitle(getString(R.string.friends)))
+        sectionContent.addView(tonalFullWidthButton(getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
         })
-        sectionContent.addView(groupTitle(getString(R.string.friends)))
         sectionContent.addView(locationBroadcastRow())
         if (friends.isEmpty()) {
             sectionContent.addView(emptyStateText(getString(R.string.no_friends)))
@@ -3062,6 +3092,42 @@ class MainActivity : AppCompatActivity() {
         cachedUserProfile = null
         cachedFriends = emptyList()
         lastProfileRefreshMillis = 0L
+    }
+
+    private fun refreshProfileSyncStatusIfVisible() {
+        if (sectionPanel.visibility == View.VISIBLE && currentSection == Section.PROFILE) {
+            cachedUserProfile?.let { renderProfileWithFriends(it, cachedFriends) } ?: showProfileScreen()
+        }
+    }
+
+    private fun syncStatusText(): View {
+        val textValue = when {
+            syncInProgress -> getString(R.string.sync_in_progress)
+            syncMetadataStore.lastSuccessfulSyncAtMillis() > 0L -> getString(
+                R.string.sync_status_synced,
+                formatSyncDateTime(syncMetadataStore.lastSuccessfulSyncAtMillis())
+            )
+            else -> getString(R.string.sync_status_never)
+        }
+        return TextView(this).apply {
+            text = textValue
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(6)
+                bottomMargin = dp(16)
+            }
+        }
+    }
+
+    private fun formatSyncDateTime(timestampMillis: Long): String {
+        return DateTimeFormatter
+            .ofPattern("d MMMM yyyy, HH:mm", Locale.forLanguageTag("ru-RU"))
+            .withZone(ZoneId.systemDefault())
+            .format(Instant.ofEpochMilli(timestampMillis))
     }
 
     private fun locationBroadcastRow(): View {
@@ -3571,6 +3637,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSection(title: String) {
         clearTrackFocus()
+        setLightSystemBars(lightStatusBar = true)
         sectionTitle.text = title
         sectionContent.removeAllViews()
         authRootView = null
@@ -3587,7 +3654,15 @@ class MainActivity : AppCompatActivity() {
         currentSection = Section.NONE
         currentAuthStep = AuthStep.NONE
         authRootView = null
+        setLightSystemBars(lightStatusBar = false)
         syncRecordingState()
+    }
+
+    private fun setLightSystemBars(lightStatusBar: Boolean) {
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = lightStatusBar
+            isAppearanceLightNavigationBars = true
+        }
     }
 
     private fun setSectionContentPadding(horizontalDp: Int) {
@@ -3885,7 +3960,7 @@ class MainActivity : AppCompatActivity() {
     private fun showDeleteDialog(track: RecordedTrack) {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.delete_track_title)
-            .setMessage(R.string.delete_track_message)
+            .setMessage(getString(R.string.delete_track_message_named, track.name))
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.delete) { _, _ ->
                 if (focusedTrackFileName == track.file.name) clearTrackFocus()
@@ -4189,7 +4264,7 @@ class MainActivity : AppCompatActivity() {
             })
             row.addView(View(this).apply {
                 setBackgroundColor(page.accentColor)
-                alpha = if (distance > 0f) 1f else 0.18f
+                alpha = if (distance > 0f) 1f else 0.1f
                 layoutParams = LinearLayout.LayoutParams(
                     0,
                     dp(10),
@@ -4340,6 +4415,26 @@ class MainActivity : AppCompatActivity() {
         return MaterialButton(this).apply {
             text = textValue
             isAllCaps = false
+            letterSpacing = 0f
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52)
+            ).apply {
+                bottomMargin = dp(12)
+            }
+        }
+    }
+
+    private fun tonalFullWidthButton(textValue: String, onClick: () -> Unit): View {
+        return MaterialButton(this).apply {
+            text = textValue
+            isAllCaps = false
+            letterSpacing = 0f
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_surface)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+            elevation = 0f
+            stateListAnimator = null
             setOnClickListener { onClick() }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -4354,6 +4449,7 @@ class MainActivity : AppCompatActivity() {
         return MaterialButton(this).apply {
             text = textValue
             isAllCaps = false
+            letterSpacing = 0f
             backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_danger))
             elevation = 0f
@@ -4504,6 +4600,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun deleteFriend(friend: FriendProfile) {
+        val friendName = friend.displayName.ifBlank { friend.email }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.delete_friend_title)
+            .setMessage(getString(R.string.delete_friend_message, friendName))
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.delete) { _, _ ->
+                deleteFriendConfirmed(friend)
+            }
+            .show()
+    }
+
+    private fun deleteFriendConfirmed(friend: FriendProfile) {
         backgroundExecutor.execute {
             runCatching {
                 supabaseClient.deleteFriend(supabaseClient.activeSession(), friend.friendshipId)
@@ -4513,6 +4621,10 @@ class MainActivity : AppCompatActivity() {
                     cachedFriendLocations = cachedFriendLocations.toMutableMap().apply { remove(friend.userId) }
                     showProfileScreen()
                     refreshFriendLocationsOnMap()
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.sync_failed, userMessage(error)), isLong = true)
                 }
             }
         }
@@ -4609,8 +4721,8 @@ class MainActivity : AppCompatActivity() {
         val color = friendColor(friend)
         val polyline = Polyline(map).apply {
             outlinePaint.color = color
-            outlinePaint.alpha = 110
-            outlinePaint.strokeWidth = dp(3).toFloat()
+            outlinePaint.alpha = 72
+            outlinePaint.strokeWidth = dp(2).toFloat()
             outlinePaint.isAntiAlias = true
             setPoints(points.map { GeoPoint(it.latitude, it.longitude) })
         }

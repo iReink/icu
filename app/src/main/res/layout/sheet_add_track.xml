@@ -14,16 +14,16 @@
         android:layout_width="56dp"
         android:layout_height="6dp"
         android:layout_gravity="center_horizontal"
-        android:layout_marginBottom="26dp"
+        android:layout_marginBottom="22dp"
         android:background="@drawable/bg_sheet_handle" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="28dp"
+        android:layout_marginBottom="22dp"
         android:text="@string/add_track"
         android:textColor="@color/black"
-        android:textSize="28sp" />
+        android:textSize="24sp" />
 
     <RadioGroup
         android:id="@+id/addTrackTypeGroup"
@@ -55,7 +55,7 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="20dp"
+        android:layout_marginTop="14dp"
         android:gravity="center_vertical|end"
         android:orientation="horizontal">
 

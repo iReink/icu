@@ -90,6 +90,7 @@ class SupabaseSyncManager(
             downloaded += pointsToImport.size
         }
 
+        metadataStore.markSuccessfulSync()
         return SyncResult(uploaded, downloaded, deleted)
     }
 
