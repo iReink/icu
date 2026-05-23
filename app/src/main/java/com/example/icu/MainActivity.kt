@@ -1768,7 +1768,19 @@ class MainActivity : AppCompatActivity() {
         }
         val container = FrameLayout(this).apply {
             setPadding(dp(20), 0, dp(20), 0)
-            addView(input)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(input)
+                addView(TextView(this@MainActivity).apply {
+                    text = getString(R.string.point_emoji_hint)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                    textSize = 13f
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(8) }
+                })
+            })
         }
 
         MaterialAlertDialogBuilder(this)
@@ -1843,10 +1855,13 @@ class MainActivity : AppCompatActivity() {
             title = getString(R.string.destination_preview_title),
             point = point,
             holePoint = null,
+            holeOffsetYPx = 0,
             primaryText = getString(R.string.place_destination_marker),
             onPrimary = { setDestinationMarker(point) },
             secondaryText = getString(R.string.save_point),
             onSecondary = { showSavePointDialog(point) },
+            tertiaryText = null,
+            onTertiary = null,
             destructiveText = null,
             onDestructive = null
         )
@@ -1862,10 +1877,13 @@ class MainActivity : AppCompatActivity() {
             title = getString(R.string.destination_title),
             point = point,
             holePoint = null,
+            holeOffsetYPx = 0,
             primaryText = null,
             onPrimary = null,
             secondaryText = getString(R.string.save_point),
             onSecondary = { showSavePointDialog(point) },
+            tertiaryText = null,
+            onTertiary = null,
             destructiveText = getString(R.string.delete_destination),
             onDestructive = ::clearDestinationMarker
         )
@@ -1876,10 +1894,18 @@ class MainActivity : AppCompatActivity() {
             title = point.name,
             point = point.toGeoPoint(),
             holePoint = point.toGeoPoint(),
+            holeOffsetYPx = -dp(14),
             primaryText = null,
             onPrimary = null,
-            secondaryText = null,
-            onSecondary = null,
+            secondaryText = if (point.visible) getString(R.string.hide_from_map) else getString(R.string.show_on_map),
+            onSecondary = {
+                savedPointStore.setPointVisibility(point, !point.visible)
+                syncTracksSilently()
+                loadSavedPointsOnMap()
+                showPointsScreenIfVisible()
+            },
+            tertiaryText = getString(R.string.rename),
+            onTertiary = { showRenamePointDialog(point) },
             destructiveText = getString(R.string.delete_destination),
             onDestructive = {
                 savedPointStore.deletePoint(point)
@@ -1894,15 +1920,18 @@ class MainActivity : AppCompatActivity() {
         title: String,
         point: GeoPoint,
         holePoint: GeoPoint?,
+        holeOffsetYPx: Int = 0,
         primaryText: String?,
         onPrimary: (() -> Unit)?,
         secondaryText: String?,
         onSecondary: (() -> Unit)?,
+        tertiaryText: String? = null,
+        onTertiary: (() -> Unit)? = null,
         destructiveText: String?,
         onDestructive: (() -> Unit)?
     ) {
         val sheet = BottomSheetDialog(this)
-        showDestinationDimOverlay(holePoint)
+        showDestinationDimOverlay(holePoint, holeOffsetYPx)
         sheet.setOnDismissListener {
             hideDestinationDimOverlay()
         }
@@ -1967,6 +1996,24 @@ class MainActivity : AppCompatActivity() {
                     ).apply { topMargin = dp(6) }
                 })
             }
+            if (tertiaryText != null && onTertiary != null) {
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = tertiaryText
+                    isAllCaps = false
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                    elevation = 0f
+                    stateListAnimator = null
+                    setOnClickListener {
+                        sheet.dismiss()
+                        onTertiary()
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(52)
+                    ).apply { topMargin = dp(6) }
+                })
+            }
             if (destructiveText != null && onDestructive != null) {
                 addView(MaterialButton(this@MainActivity).apply {
                     text = destructiveText
@@ -2006,7 +2053,19 @@ class MainActivity : AppCompatActivity() {
         }
         val container = FrameLayout(this).apply {
             setPadding(dp(20), 0, dp(20), 0)
-            addView(input)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(input)
+                addView(TextView(this@MainActivity).apply {
+                    text = getString(R.string.point_emoji_hint)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                    textSize = 13f
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(8) }
+                })
+            })
         }
 
         val dialog = MaterialAlertDialogBuilder(this)
@@ -2033,7 +2092,7 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private fun showDestinationDimOverlay(holePoint: GeoPoint? = null) {
+    private fun showDestinationDimOverlay(holePoint: GeoPoint? = null, holeOffsetYPx: Int = 0) {
         hideDestinationDimOverlay()
         val holeOnScreen = holePoint?.let { point ->
             val pointOnMap = Point().also { map.projection.toPixels(point, it) }
@@ -2043,7 +2102,7 @@ class MainActivity : AppCompatActivity() {
             contentHost.getLocationOnScreen(hostLocation)
             Point(
                 mapLocation[0] - hostLocation[0] + pointOnMap.x,
-                mapLocation[1] - hostLocation[1] + pointOnMap.y
+                mapLocation[1] - hostLocation[1] + pointOnMap.y + holeOffsetYPx
             )
         }
         val overlay = ReticleDimOverlay(this).apply {
@@ -2112,7 +2171,7 @@ class MainActivity : AppCompatActivity() {
                 val marker = Marker(map).apply {
                     position = point.toGeoPoint()
                     title = point.name
-                    icon = BitmapDrawable(resources, createSavedPointIcon())
+                    icon = BitmapDrawable(resources, createSavedPointIcon(point.name))
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                     setOnMarkerClickListener { _, _ ->
                         showSavedPointDetailsSheet(point)
@@ -2125,24 +2184,61 @@ class MainActivity : AppCompatActivity() {
         map.invalidate()
     }
 
-    private fun createSavedPointIcon(): Bitmap {
-        val size = dp(34)
+    private fun createSavedPointIcon(pointName: String): Bitmap {
+        val emoji = leadingEmoji(pointName)
+        val size = dp(if (emoji != null) 42 else 34)
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         val center = size / 2f
 
-        paint.style = Paint.Style.FILL
-        paint.color = Color.WHITE
-        canvas.drawCircle(center, center, dp(10).toFloat(), paint)
-        paint.color = Color.rgb(214, 38, 42)
-        canvas.drawCircle(center, center, dp(6).toFloat(), paint)
+        if (emoji != null) {
+            paint.style = Paint.Style.FILL
+            paint.color = Color.WHITE
+            canvas.drawCircle(center, center, dp(18).toFloat(), paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = dp(2).toFloat()
+            paint.color = ContextCompat.getColor(this, R.color.icu_purple_ink)
+            canvas.drawCircle(center, center, dp(18).toFloat() - paint.strokeWidth / 2f, paint)
+            paint.style = Paint.Style.FILL
+            paint.color = Color.BLACK
+            paint.textAlign = Paint.Align.CENTER
+            paint.textSize = dp(24).toFloat()
+            val textY = center - (paint.descent() + paint.ascent()) / 2f
+            canvas.drawText(emoji, center, textY, paint)
+        } else {
+            paint.style = Paint.Style.FILL
+            paint.color = Color.WHITE
+            canvas.drawCircle(center, center, dp(10).toFloat(), paint)
+            paint.color = Color.rgb(214, 38, 42)
+            canvas.drawCircle(center, center, dp(6).toFloat(), paint)
 
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = dp(2).toFloat()
-        paint.color = Color.rgb(60, 47, 47)
-        canvas.drawLine(center, center + dp(9), center, size - dp(2).toFloat(), paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = dp(2).toFloat()
+            paint.color = Color.rgb(60, 47, 47)
+            canvas.drawLine(center, center + dp(9), center, size - dp(2).toFloat(), paint)
+        }
         return bitmap
+    }
+
+    private fun leadingEmoji(value: String): String? {
+        val trimmed = value.trimStart()
+        if (trimmed.isEmpty()) return null
+        val firstCodePoint = trimmed.codePointAt(0)
+        val type = Character.getType(firstCodePoint)
+        val isEmojiLike = type == Character.OTHER_SYMBOL.toInt() ||
+            firstCodePoint in 0x1F000..0x1FAFF ||
+            firstCodePoint in 0x2600..0x27BF
+        if (!isEmojiLike) return null
+
+        val end = Character.charCount(firstCodePoint)
+        val nextCodePoint = trimmed.codePointAtOrNull(end)
+        val emojiEnd = if (nextCodePoint == 0xFE0F) end + Character.charCount(nextCodePoint) else end
+        return trimmed.substring(0, emojiEnd)
+    }
+
+    private fun String.codePointAtOrNull(index: Int): Int? {
+        return if (index in indices) codePointAt(index) else null
     }
 
     private fun createDestinationFlagIcon(): Bitmap {
