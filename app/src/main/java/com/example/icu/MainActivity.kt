@@ -1230,10 +1230,19 @@ class MainActivity : AppCompatActivity() {
         regularTracks.forEach { track ->
             addSavedTrackOverlay(track, isFocused = false, isDimmed = focusedTrack != null)
         }
+        bringSavedPointOverlaysToFront()
         focusedTrack?.let { track ->
             addSavedTrackOverlay(track, isFocused = true, isDimmed = false)
         }
         map.invalidate()
+    }
+
+    private fun bringSavedPointOverlaysToFront() {
+        if (savedPointOverlays.isEmpty()) return
+        savedPointOverlays.forEach { overlay ->
+            map.overlays.remove(overlay)
+            map.overlays.add(overlay)
+        }
     }
 
     private fun addSavedTrackOverlay(track: RecordedTrack, isFocused: Boolean, isDimmed: Boolean) {
@@ -1894,7 +1903,7 @@ class MainActivity : AppCompatActivity() {
             title = point.name,
             point = point.toGeoPoint(),
             holePoint = point.toGeoPoint(),
-            holeOffsetYPx = -dp(14),
+            holeOffsetYPx = savedPointHighlightOffset(point),
             primaryText = null,
             onPrimary = null,
             secondaryText = if (point.visible) getString(R.string.hide_from_map) else getString(R.string.show_on_map),
@@ -2127,6 +2136,10 @@ class MainActivity : AppCompatActivity() {
             .start()
     }
 
+    private fun savedPointHighlightOffset(point: SavedPoint): Int {
+        return if (leadingEmoji(point.name) == null) -dp(14) else 0
+    }
+
     private fun hideDestinationDimOverlay() {
         val overlay = destinationDimOverlay ?: return
         destinationDimOverlay = null
@@ -2172,7 +2185,11 @@ class MainActivity : AppCompatActivity() {
                     position = point.toGeoPoint()
                     title = point.name
                     icon = BitmapDrawable(resources, createSavedPointIcon(point.name))
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    if (leadingEmoji(point.name) == null) {
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    } else {
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    }
                     setOnMarkerClickListener { _, _ ->
                         showSavedPointDetailsSheet(point)
                         true
@@ -2181,6 +2198,10 @@ class MainActivity : AppCompatActivity() {
                 savedPointOverlays.add(marker)
                 map.overlays.add(marker)
             }
+        focusedTrackFileName?.let {
+            applySavedTrackOverlays(visibleSavedTracks)
+            return
+        }
         map.invalidate()
     }
 
