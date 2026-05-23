@@ -135,6 +135,8 @@ class MainActivity : AppCompatActivity() {
     private var pendingInviteToken: String? = null
     private var highlightedFriendshipId: String? = null
     private var savedTrackOverlays = mutableListOf<Overlay>()
+    private var allSavedTracks: List<RecordedTrack> = emptyList()
+    private var hasLoadedSavedTracks = false
     private var visibleSavedTracks: List<RecordedTrack> = emptyList()
     private var focusedTrackFileName: String? = null
     private var savedPointOverlays = mutableListOf<Overlay>()
@@ -1051,7 +1053,7 @@ class MainActivity : AppCompatActivity() {
     private fun showSavedTrackSnackbarIfNeeded() {
         val savedTrackFileName = pendingSavedTrackFileName ?: return
         pendingSavedTrackFileName = null
-        trackStore.loadTracks()
+        allSavedTracks
             .firstOrNull { track -> track.file.name == savedTrackFileName }
             ?.let { savedTrack -> showTrackSavedSnackbar(savedTrack) }
     }
@@ -1171,7 +1173,6 @@ class MainActivity : AppCompatActivity() {
             activeTrackPolyline = null
             if (wasRecording) {
                 loadSavedTracksAsync()
-                showSavedTrackSnackbarIfNeeded()
                 syncTracksSilently()
             }
         }
@@ -1206,10 +1207,14 @@ class MainActivity : AppCompatActivity() {
     private fun loadSavedTracksAsync() {
         val request = ++savedTracksLoadRequest
         backgroundExecutor.execute {
-            val tracks = trackStore.loadTracks().filter { it.visible }
+            val tracks = trackStore.loadTracks()
             runOnUiThread {
                 if (request == savedTracksLoadRequest) {
-                    applySavedTrackOverlays(tracks)
+                    allSavedTracks = tracks
+                    hasLoadedSavedTracks = true
+                    applySavedTrackOverlays(tracks.filter { it.visible })
+                    showSavedTrackSnackbarIfNeeded()
+                    showTracksScreenIfVisible()
                 }
             }
         }
@@ -1791,6 +1796,10 @@ class MainActivity : AppCompatActivity() {
             startedAtMillis = points.first().timeMillis,
             name = name.ifBlank { GpxTrackStore.defaultTrackName(TrackType.CUSTOM, points.first().timeMillis) }
         )
+        allSavedTracks = (allSavedTracks.filterNot { it.file.name == savedTrack.file.name } + savedTrack)
+            .sortedByDescending { it.startedAtMillis }
+        hasLoadedSavedTracks = true
+        applySavedTrackOverlays(allSavedTracks.filter { it.visible })
         syncTracksSilently()
         loadSavedTracksAsync()
         exitMeasurementMode()
@@ -2176,9 +2185,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun showTracksScreen() {
         currentSection = Section.TRACKS
-        val tracks = trackStore.loadTracks()
+        val tracks = allSavedTracks
         showSection(getString(R.string.my_tracks))
         setSectionContentPadding(horizontalDp = 0)
+
+        if (!hasLoadedSavedTracks && tracks.isEmpty()) {
+            sectionContent.addView(emptyStateText(getString(R.string.loading)))
+            loadSavedTracksAsync()
+            return
+        }
 
         if (tracks.isEmpty()) {
             sectionContent.addView(emptyStateText(getString(R.string.no_tracks)))
