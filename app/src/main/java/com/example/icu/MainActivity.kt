@@ -78,6 +78,7 @@ import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
@@ -135,6 +136,7 @@ class MainActivity : AppCompatActivity() {
     private var highlightedFriendshipId: String? = null
     private var savedTrackOverlays = mutableListOf<Overlay>()
     private var visibleSavedTracks: List<RecordedTrack> = emptyList()
+    private var focusedTrackFileName: String? = null
     private var savedPointOverlays = mutableListOf<Overlay>()
     private var friendLocationOverlays = mutableListOf<Overlay>()
     private var destinationMarker: Marker? = null
@@ -422,7 +424,11 @@ class MainActivity : AppCompatActivity() {
                     addMeasurementPoint()
                     return true
                 }
-                return handleSavedTrackTap(point)
+                val handledTrackTap = handleSavedTrackTap(point)
+                if (!handledTrackTap) {
+                    clearTrackFocus()
+                }
+                return handledTrackTap
             }
 
             override fun longPressHelper(point: GeoPoint): Boolean {
@@ -452,18 +458,22 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
                 R.id.navTracks -> {
+                    clearTrackFocus()
                     showTracksScreen()
                     true
                 }
                 R.id.navPoints -> {
+                    clearTrackFocus()
                     showPointsScreen()
                     true
                 }
                 R.id.navProfile -> {
+                    clearTrackFocus()
                     showProfileScreen()
                     true
                 }
                 R.id.navSettings -> {
+                    clearTrackFocus()
                     showToolsScreen()
                     true
                 }
@@ -1021,11 +1031,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTrackSavedSnackbar(track: RecordedTrack) {
+        focusTrack(track)
+        elapsedHandler.postDelayed({
+            if (focusedTrackFileName == track.file.name) clearTrackFocus()
+        }, AUTO_TRACK_FOCUS_MS)
         showSnackbar(
             message = getString(R.string.track_saved_visible),
             duration = TRACK_SAVED_SNACKBAR_MS,
             actionText = getString(R.string.hide_action)
         ) {
+            clearTrackFocus()
             trackStore.setTrackVisibility(track, false)
             syncTracksSilently()
             loadSavedTracksAsync()
@@ -1116,6 +1131,7 @@ class MainActivity : AppCompatActivity() {
         val type = pendingStartType ?: return
         if (!hasLocationPermission()) return
 
+        clearTrackFocus()
         pendingStartType = null
         val intent = Intent(this, TrackRecordingService::class.java).apply {
             action = TrackRecordingService.ACTION_START
@@ -1203,20 +1219,35 @@ class MainActivity : AppCompatActivity() {
         savedTrackOverlays.forEach { map.overlays.remove(it) }
         savedTrackOverlays.clear()
         visibleSavedTracks = tracks
+        val focusedTrack = tracks.firstOrNull { it.file.name == focusedTrackFileName }
+        val regularTracks = tracks.filterNot { it.file.name == focusedTrackFileName }
 
-        tracks.forEach { track ->
-            if (track.points.size == 1) {
-                val marker = createSinglePointTrackMarker(track)
-                savedTrackOverlays.add(marker)
-                map.overlays.add(marker)
-            } else {
-                val polyline = createSavedTrackPolyline(track)
-                polyline.setPoints(track.points.map { it.toGeoPoint() })
-                savedTrackOverlays.add(polyline)
-                map.overlays.add(polyline)
-            }
+        regularTracks.forEach { track ->
+            addSavedTrackOverlay(track, isFocused = false, isDimmed = focusedTrack != null)
+        }
+        focusedTrack?.let { track ->
+            addSavedTrackOverlay(track, isFocused = true, isDimmed = false)
         }
         map.invalidate()
+    }
+
+    private fun addSavedTrackOverlay(track: RecordedTrack, isFocused: Boolean, isDimmed: Boolean) {
+        if (track.points.size == 1) {
+            val marker = createSinglePointTrackMarker(track, isFocused, isDimmed)
+            savedTrackOverlays.add(marker)
+            map.overlays.add(marker)
+        } else {
+            if (isFocused) {
+                val halo = createFocusedTrackHalo(track)
+                halo.setPoints(track.points.map { it.toGeoPoint() })
+                savedTrackOverlays.add(halo)
+                map.overlays.add(halo)
+            }
+            val polyline = createSavedTrackPolyline(track, isFocused, isDimmed)
+            polyline.setPoints(track.points.map { it.toGeoPoint() })
+            savedTrackOverlays.add(polyline)
+            map.overlays.add(polyline)
+        }
     }
 
     private fun createTrackPolyline(type: TrackType): Polyline {
@@ -1231,8 +1262,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun createSavedTrackPolyline(track: RecordedTrack): Polyline {
+    private fun createSavedTrackPolyline(track: RecordedTrack, isFocused: Boolean, isDimmed: Boolean): Polyline {
         return createTrackPolyline(track.type).apply {
+            outlinePaint.strokeWidth = if (isFocused) TRACK_FOCUS_STROKE_WIDTH else TRACK_STROKE_WIDTH
+            outlinePaint.alpha = if (isDimmed) TRACK_DIM_ALPHA else 255
             setOnClickListener { _, _, eventPos ->
                 if (isMeasurementMode) {
                     addMeasurementPoint()
@@ -1244,10 +1277,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun createSinglePointTrackMarker(track: RecordedTrack): Marker {
+    private fun createFocusedTrackHalo(track: RecordedTrack): Polyline {
+        return Polyline(map).apply {
+            outlinePaint.color = Color.WHITE
+            outlinePaint.strokeWidth = TRACK_FOCUS_HALO_WIDTH
+            outlinePaint.alpha = 220
+            outlinePaint.isAntiAlias = true
+            setOnClickListener { _, _, eventPos ->
+                if (isMeasurementMode) {
+                    addMeasurementPoint()
+                } else {
+                    handleSavedTrackTap(eventPos)
+                }
+                true
+            }
+        }
+    }
+
+    private fun createSinglePointTrackMarker(track: RecordedTrack, isFocused: Boolean, isDimmed: Boolean): Marker {
         return Marker(map).apply {
             position = track.points.first().toGeoPoint()
-            icon = BitmapDrawable(resources, createTrackPointIcon(track.type.color))
+            icon = BitmapDrawable(resources, createTrackPointIcon(track.type.color, isFocused, isDimmed))
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
             setOnMarkerClickListener { marker, _ ->
                 if (isMeasurementMode) {
@@ -1273,9 +1323,12 @@ class MainActivity : AppCompatActivity() {
             .map { it.track }
 
         return when (hits.size) {
-            0 -> false
+            0 -> {
+                clearTrackFocus()
+                false
+            }
             1 -> {
-                showTrackTooltip(hits.first(), point)
+                focusTrack(hits.first(), tooltipPoint = point, fitToScreen = false)
                 true
             }
             else -> {
@@ -1343,11 +1396,56 @@ class MainActivity : AppCompatActivity() {
         tracks.forEach { track ->
             content.addView(trackSelectionCard(track) {
                 dialog.dismiss()
-                showTrackTooltip(track, tapPoint)
+                focusTrack(track, tooltipPoint = tapPoint, fitToScreen = false)
             })
         }
 
         dialog.show()
+    }
+
+    private fun focusTrack(track: RecordedTrack, tooltipPoint: GeoPoint? = null, fitToScreen: Boolean = true) {
+        focusedTrackFileName = track.file.name
+        applySavedTrackOverlays(visibleSavedTracks)
+        if (fitToScreen) {
+            fitTrackInMap(track)
+        }
+        val point = tooltipPoint ?: trackTooltipPoint(track)
+        val delay = if (fitToScreen) TRACK_FOCUS_TOOLTIP_DELAY_MS else 0L
+        elapsedHandler.postDelayed({
+            showTrackTooltip(track, point)
+        }, delay)
+    }
+
+    private fun clearTrackFocus() {
+        if (focusedTrackFileName == null && infoTooltip == null) return
+        focusedTrackFileName = null
+        infoTooltip?.dismiss()
+        infoTooltip = null
+        applySavedTrackOverlays(visibleSavedTracks)
+    }
+
+    private fun fitTrackInMap(track: RecordedTrack) {
+        if (track.points.isEmpty()) return
+        if (track.points.size == 1) {
+            map.controller.animateTo(track.points.first().toGeoPoint())
+            map.controller.setZoom(max(map.zoomLevelDouble, 16.0))
+            return
+        }
+        map.zoomToBoundingBox(track.boundingBox(), true, dp(TRACK_FOCUS_VIEW_PADDING_DP))
+    }
+
+    private fun trackTooltipPoint(track: RecordedTrack): GeoPoint {
+        return track.points.getOrNull(track.points.size / 2)?.toGeoPoint()
+            ?: track.points.firstOrNull()?.toGeoPoint()
+            ?: GeoPoint(map.mapCenter.latitude, map.mapCenter.longitude)
+    }
+
+    private fun RecordedTrack.boundingBox(): BoundingBox {
+        val north = points.maxOf { it.latitude }
+        val south = points.minOf { it.latitude }
+        val east = points.maxOf { it.longitude }
+        val west = points.minOf { it.longitude }
+        return BoundingBox(north, east, south, west)
     }
 
     private fun trackSelectionCard(track: RecordedTrack, onClick: () -> Unit): View {
@@ -1448,17 +1546,18 @@ class MainActivity : AppCompatActivity() {
         infoTooltip = popup
     }
 
-    private fun createTrackPointIcon(color: Int): Bitmap {
-        val size = dp(18).coerceAtLeast(18)
+    private fun createTrackPointIcon(color: Int, isFocused: Boolean = false, isDimmed: Boolean = false): Bitmap {
+        val size = dp(if (isFocused) 26 else 18).coerceAtLeast(18)
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         val center = size / 2f
         paint.style = Paint.Style.FILL
+        paint.alpha = if (isDimmed) TRACK_DIM_ALPHA else 255
         paint.color = Color.WHITE
         canvas.drawCircle(center, center, center, paint)
         paint.color = color
-        canvas.drawCircle(center, center, center - dp(3), paint)
+        canvas.drawCircle(center, center, center - dp(if (isFocused) 5 else 3), paint)
         return bitmap
     }
 
@@ -1467,6 +1566,7 @@ class MainActivity : AppCompatActivity() {
             showSnackbar(getString(R.string.recording_already_started))
             return
         }
+        clearTrackFocus()
         hideSection()
         isMeasurementMode = true
         measurementPoints.clear()
@@ -1684,7 +1784,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveMeasurementRoute(points: List<TrackPoint>, name: String) {
         if (points.isEmpty()) return
-        trackStore.saveTrack(
+        val savedTrack = trackStore.saveTrack(
             type = TrackType.CUSTOM,
             points = points,
             distanceMeters = calculateRouteDistance(points),
@@ -1694,6 +1794,10 @@ class MainActivity : AppCompatActivity() {
         syncTracksSilently()
         loadSavedTracksAsync()
         exitMeasurementMode()
+        focusTrack(savedTrack)
+        elapsedHandler.postDelayed({
+            if (focusedTrackFileName == savedTrack.file.name) clearTrackFocus()
+        }, AUTO_TRACK_FOCUS_MS)
     }
 
     private fun calculateRouteDistance(points: List<TrackPoint>): Float {
@@ -3171,6 +3275,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSection(title: String) {
+        clearTrackFocus()
         sectionTitle.text = title
         sectionContent.removeAllViews()
         authRootView = null
@@ -3215,6 +3320,9 @@ class MainActivity : AppCompatActivity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundResource(R.drawable.bg_track_cell)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showTrackOnMap(track) }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -3294,7 +3402,10 @@ class MainActivity : AppCompatActivity() {
             setIconResource(R.drawable.ic_kebab_vertical)
             iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
             iconPadding = 0
-            setOnClickListener { anchor -> showTrackMenu(anchor, track) }
+            setOnClickListener { anchor ->
+                anchor.parent.requestDisallowInterceptTouchEvent(true)
+                showTrackMenu(anchor, track)
+            }
             layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
         })
 
@@ -3316,6 +3427,12 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
+    private fun showTrackOnMap(track: RecordedTrack) {
+        hideSection()
+        bottomNavigation.selectedItemId = R.id.navMap
+        focusTrack(track)
+    }
+
     private fun showTrackMenu(anchor: View, track: RecordedTrack) {
         PopupMenu(this, anchor).apply {
             menu.add(0, TRACK_ACTION_RENAME, 0, R.string.rename)
@@ -3330,6 +3447,7 @@ class MainActivity : AppCompatActivity() {
                 when (item.itemId) {
                     TRACK_ACTION_RENAME -> showRenameDialog(track)
                     TRACK_ACTION_VISIBILITY -> {
+                        if (focusedTrackFileName == track.file.name) clearTrackFocus()
                         trackStore.setTrackVisibility(track, !track.visible)
                         syncTracksSilently()
                         loadSavedTracksAsync()
@@ -3373,6 +3491,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage(R.string.delete_track_message)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.delete) { _, _ ->
+                if (focusedTrackFileName == track.file.name) clearTrackFocus()
                 syncManager.markDeleted(track)
                 trackStore.deleteTrack(track)
                 syncTracksSilently()
@@ -4550,6 +4669,12 @@ class MainActivity : AppCompatActivity() {
         private const val FRIEND_ACTION_SHARE = 10
         private const val FRIEND_ACTION_DELETE = 11
         private const val TRACK_STROKE_WIDTH = 8f
+        private const val TRACK_FOCUS_STROKE_WIDTH = 12f
+        private const val TRACK_FOCUS_HALO_WIDTH = 20f
+        private const val TRACK_DIM_ALPHA = 90
+        private const val TRACK_FOCUS_VIEW_PADDING_DP = 56
+        private const val TRACK_FOCUS_TOOLTIP_DELAY_MS = 420L
+        private const val AUTO_TRACK_FOCUS_MS = 10_000L
         private const val TIMER_INTERVAL_MS = 1_000L
         private const val FRIEND_HIGHLIGHT_DURATION_MS = 3_500L
         private const val STARTUP_DEFER_MS = 350L
