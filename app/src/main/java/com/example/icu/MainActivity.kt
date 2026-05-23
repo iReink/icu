@@ -2220,7 +2220,10 @@ class MainActivity : AppCompatActivity() {
 
         if (pageTracks.isEmpty()) {
             content.addView(emptyStateText(getString(R.string.no_tracks)))
-            return content
+            return ScrollView(this).apply {
+                isFillViewport = true
+                addView(content)
+            }
         }
 
         pageTracks.groupBy { GpxTrackStore.monthKey(it) }
@@ -2231,7 +2234,10 @@ class MainActivity : AppCompatActivity() {
                     content.addView(trackCard(track))
                 }
             }
-        return content
+        return ScrollView(this).apply {
+            isFillViewport = true
+            addView(content)
+        }
     }
 
     private fun showStatisticsScreen() {
@@ -4670,7 +4676,7 @@ class MainActivity : AppCompatActivity() {
         private const val FRIEND_ACTION_DELETE = 11
         private const val TRACK_STROKE_WIDTH = 8f
         private const val TRACK_FOCUS_STROKE_WIDTH = 12f
-        private const val TRACK_FOCUS_HALO_WIDTH = 20f
+        private const val TRACK_FOCUS_HALO_WIDTH = 26f
         private const val TRACK_DIM_ALPHA = 90
         private const val TRACK_FOCUS_VIEW_PADDING_DP = 56
         private const val TRACK_FOCUS_TOOLTIP_DELAY_MS = 420L
