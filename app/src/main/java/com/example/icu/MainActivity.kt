@@ -62,6 +62,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.ItemTouchHelper
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomnavigation.BottomNavigationView
@@ -2524,6 +2525,7 @@ class MainActivity : AppCompatActivity() {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     (resources.displayMetrics.heightPixels - dp(190)).coerceAtLeast(dp(420))
                 )
+                layoutManager = LinearLayoutManager(this@MainActivity)
                 setPadding(dp(20), 0, dp(20), dp(32))
                 clipToPadding = false
                 itemAnimator = null
