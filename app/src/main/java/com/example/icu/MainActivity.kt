@@ -179,6 +179,8 @@ class MainActivity : AppCompatActivity() {
     private var selectedTrackListTab = 0
     private var trackSearchQuery = ""
     private var pointSearchQuery = ""
+    private var skippedTrackRefreshes = 0
+    private var skippedPointRefreshes = 0
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
 
     private val foregroundLocationListener = LocationListener { location ->
@@ -1009,6 +1011,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun showTracksScreenIfVisible() {
         if (sectionPanel.visibility == View.VISIBLE && currentSection == Section.TRACKS) {
+            if (skippedTrackRefreshes > 0) {
+                skippedTrackRefreshes--
+                return
+            }
             if (isSearchInputFocused()) return
             showTracksScreen()
         }
@@ -1016,6 +1022,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun showPointsScreenIfVisible() {
         if (sectionPanel.visibility == View.VISIBLE && currentSection == Section.POINTS) {
+            if (skippedPointRefreshes > 0) {
+                skippedPointRefreshes--
+                return
+            }
             if (isSearchInputFocused()) return
             showPointsScreen()
         }
@@ -1066,9 +1076,11 @@ class MainActivity : AppCompatActivity() {
             actionText = getString(R.string.hide_action)
         ) {
             clearTrackFocus()
-            trackStore.setTrackVisibility(track, false)
+            val updated = trackStore.setTrackVisibility(track, false)
+            replaceCachedTrack(updated)
+            applySavedTrackOverlays(savedTracksForMap())
+            skippedTrackRefreshes = 2
             syncTracksSilently()
-            loadSavedTracksAsync()
             showTracksScreenIfVisible()
         }
     }
@@ -1235,7 +1247,7 @@ class MainActivity : AppCompatActivity() {
                 if (request == savedTracksLoadRequest) {
                     allSavedTracks = tracks
                     hasLoadedSavedTracks = true
-                    applySavedTrackOverlays(tracks.filter { it.visible })
+                    applySavedTrackOverlays(savedTracksForMap())
                     showSavedTrackSnackbarIfNeeded()
                     showTracksScreenIfVisible()
                 }
@@ -1246,7 +1258,7 @@ class MainActivity : AppCompatActivity() {
     private fun applySavedTrackOverlays(tracks: List<RecordedTrack>) {
         savedTrackOverlays.forEach { map.overlays.remove(it) }
         savedTrackOverlays.clear()
-        visibleSavedTracks = tracks
+        visibleSavedTracks = tracks.filter { it.visible }
         val focusedTrack = tracks.firstOrNull { it.file.name == focusedTrackFileName }
         val regularTracks = tracks.filterNot { it.file.name == focusedTrackFileName }
 
@@ -1258,6 +1270,14 @@ class MainActivity : AppCompatActivity() {
             addSavedTrackOverlay(track, isFocused = true, isDimmed = false)
         }
         map.invalidate()
+    }
+
+    private fun savedTracksForMap(): List<RecordedTrack> {
+        val visibleTracks = allSavedTracks.filter { it.visible }
+        val focusedHiddenTrack = focusedTrackFileName?.let { fileName ->
+            allSavedTracks.firstOrNull { track -> track.file.name == fileName && !track.visible }
+        }
+        return if (focusedHiddenTrack != null) visibleTracks + focusedHiddenTrack else visibleTracks
     }
 
     private fun bringSavedPointOverlaysToFront() {
@@ -1442,7 +1462,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun focusTrack(track: RecordedTrack, tooltipPoint: GeoPoint? = null, fitToScreen: Boolean = true) {
         focusedTrackFileName = track.file.name
-        applySavedTrackOverlays(visibleSavedTracks)
+        applySavedTrackOverlays(savedTracksForMap())
         if (fitToScreen) {
             fitTrackInMap(track)
         }
@@ -1458,7 +1478,7 @@ class MainActivity : AppCompatActivity() {
         focusedTrackFileName = null
         infoTooltip?.dismiss()
         infoTooltip = null
-        applySavedTrackOverlays(visibleSavedTracks)
+        applySavedTrackOverlays(savedTracksForMap())
     }
 
     private fun fitTrackInMap(track: RecordedTrack) {
@@ -1843,7 +1863,7 @@ class MainActivity : AppCompatActivity() {
         allSavedTracks = (allSavedTracks.filterNot { it.file.name == savedTrack.file.name } + savedTrack)
             .sortedByDescending { it.startedAtMillis }
         hasLoadedSavedTracks = true
-        applySavedTrackOverlays(allSavedTracks.filter { it.visible })
+        applySavedTrackOverlays(savedTracksForMap())
         syncTracksSilently()
         loadSavedTracksAsync()
         exitMeasurementMode()
@@ -1932,6 +1952,7 @@ class MainActivity : AppCompatActivity() {
             secondaryText = if (point.visible) getString(R.string.hide_from_map) else getString(R.string.show_on_map),
             onSecondary = {
                 savedPointStore.setPointVisibility(point, !point.visible)
+                skippedPointRefreshes = 1
                 syncTracksSilently()
                 loadSavedPointsOnMap()
                 showPointsScreenIfVisible()
@@ -1941,6 +1962,7 @@ class MainActivity : AppCompatActivity() {
             destructiveText = getString(R.string.delete_destination),
             onDestructive = {
                 savedPointStore.deletePoint(point)
+                skippedPointRefreshes = 1
                 syncTracksSilently()
                 loadSavedPointsOnMap()
                 showPointsScreenIfVisible()
@@ -2222,7 +2244,7 @@ class MainActivity : AppCompatActivity() {
                 map.overlays.add(marker)
             }
         focusedTrackFileName?.let {
-            applySavedTrackOverlays(visibleSavedTracks)
+            applySavedTrackOverlays(savedTracksForMap())
             return
         }
         map.invalidate()
@@ -2646,6 +2668,7 @@ class MainActivity : AppCompatActivity() {
                     POINT_ACTION_RENAME -> showRenamePointDialog(point)
                     POINT_ACTION_VISIBILITY -> {
                         savedPointStore.setPointVisibility(point, !point.visible)
+                        skippedPointRefreshes = 1
                         syncTracksSilently()
                         loadSavedPointsOnMap()
                         showPointsScreen()
@@ -2675,6 +2698,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.save) { _, _ ->
                 savedPointStore.renamePoint(point, input.text.toString().trim())
+                skippedPointRefreshes = 1
                 syncTracksSilently()
                 loadSavedPointsOnMap()
                 showPointsScreen()
@@ -2689,6 +2713,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.delete) { _, _ ->
                 savedPointStore.deletePoint(point)
+                skippedPointRefreshes = 1
                 syncTracksSilently()
                 loadSavedPointsOnMap()
                 showPointsScreen()
@@ -3795,6 +3820,9 @@ class MainActivity : AppCompatActivity() {
     private fun showTrackOnMap(track: RecordedTrack) {
         hideSection()
         bottomNavigation.selectedItemId = R.id.navMap
+        if (allSavedTracks.none { it.file.name == track.file.name }) {
+            allSavedTracks = (allSavedTracks + track).sortedByDescending { it.startedAtMillis }
+        }
         focusTrack(track)
     }
 
@@ -3813,9 +3841,11 @@ class MainActivity : AppCompatActivity() {
                     TRACK_ACTION_RENAME -> showRenameDialog(track)
                     TRACK_ACTION_VISIBILITY -> {
                         if (focusedTrackFileName == track.file.name) clearTrackFocus()
-                        trackStore.setTrackVisibility(track, !track.visible)
+                        val updated = trackStore.setTrackVisibility(track, !track.visible)
+                        replaceCachedTrack(updated)
+                        applySavedTrackOverlays(savedTracksForMap())
+                        skippedTrackRefreshes = 2
                         syncTracksSilently()
-                        loadSavedTracksAsync()
                         showTracksScreen()
                     }
                     TRACK_ACTION_DELETE -> showDeleteDialog(track)
@@ -3842,9 +3872,11 @@ class MainActivity : AppCompatActivity() {
             .setView(container)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.save) { _, _ ->
-                trackStore.renameTrack(track, input.text.toString().trim())
+                val updated = trackStore.renameTrack(track, input.text.toString().trim())
+                replaceCachedTrack(updated)
+                applySavedTrackOverlays(savedTracksForMap())
+                skippedTrackRefreshes = 2
                 syncTracksSilently()
-                loadSavedTracksAsync()
                 showTracksScreen()
             }
             .show()
@@ -3859,11 +3891,19 @@ class MainActivity : AppCompatActivity() {
                 if (focusedTrackFileName == track.file.name) clearTrackFocus()
                 syncManager.markDeleted(track)
                 trackStore.deleteTrack(track)
+                allSavedTracks = allSavedTracks.filterNot { it.file.name == track.file.name }
+                applySavedTrackOverlays(savedTracksForMap())
+                skippedTrackRefreshes = 2
                 syncTracksSilently()
-                loadSavedTracksAsync()
                 showTracksScreen()
             }
             .show()
+    }
+
+    private fun replaceCachedTrack(track: RecordedTrack) {
+        allSavedTracks = (allSavedTracks.filterNot { it.file.name == track.file.name } + track)
+            .sortedByDescending { it.startedAtMillis }
+        hasLoadedSavedTracks = true
     }
 
     private fun settingsRow(): View {
@@ -5090,6 +5130,36 @@ class MainActivity : AppCompatActivity() {
 
         override fun isLongPressDragEnabled(): Boolean = false
 
+        override fun onChildDraw(
+            c: Canvas,
+            recyclerView: RecyclerView,
+            viewHolder: RecyclerView.ViewHolder,
+            dX: Float,
+            dY: Float,
+            actionState: Int,
+            isCurrentlyActive: Boolean
+        ) {
+            super.onChildDraw(c, recyclerView, viewHolder, dX, dY, actionState, isCurrentlyActive)
+            if (actionState != ItemTouchHelper.ACTION_STATE_DRAG || !isCurrentlyActive) return
+
+            val zonePx = dp(DRAG_SCROLL_ZONE_DP).toFloat()
+            val top = viewHolder.itemView.top + dY
+            val bottom = viewHolder.itemView.bottom + dY
+            val scrollY = when {
+                top < zonePx -> -dragScrollStep(zonePx - top, zonePx)
+                bottom > recyclerView.height - zonePx -> dragScrollStep(bottom - (recyclerView.height - zonePx), zonePx)
+                else -> 0
+            }
+            if (scrollY != 0) {
+                recyclerView.scrollBy(0, scrollY)
+            }
+        }
+
+        private fun dragScrollStep(overlapPx: Float, zonePx: Float): Int {
+            val ratio = (overlapPx / zonePx).coerceIn(0.2f, 1f)
+            return (dp(DRAG_SCROLL_MAX_STEP_DP) * ratio).toInt().coerceAtLeast(2)
+        }
+
         override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
             super.onSelectedChanged(viewHolder, actionState)
             if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) {
@@ -5109,6 +5179,7 @@ class MainActivity : AppCompatActivity() {
                 .setDuration(140L)
                 .start()
             savedPointStore.reorderPoints(adapter.currentPoints())
+            skippedPointRefreshes = 1
             syncTracksSilently()
             loadSavedPointsOnMap()
         }
@@ -5149,5 +5220,7 @@ class MainActivity : AppCompatActivity() {
         private const val TRACK_SAVED_SNACKBAR_MS = 10_000
         private const val CHANGELOG_ASSET_NAME = "CHANGELOG.md"
         private const val SEARCH_INPUT_TAG = "icu_search_input"
+        private const val DRAG_SCROLL_ZONE_DP = 132
+        private const val DRAG_SCROLL_MAX_STEP_DP = 24
     }
 }
