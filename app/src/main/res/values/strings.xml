@@ -38,7 +38,7 @@
     <string name="measurement_route_name_title">Название маршрута</string>
     <string name="manual_tracks">Ручные</string>
     <string name="walk_tracks">Пешие</string>
-    <string name="bike_tracks">Велосипедные</string>
+    <string name="bike_tracks">Вело</string>
     <string name="app_version">Версия %1$s</string>
     <string name="changelog_title">Что нового</string>
     <string name="high_accuracy">Высокая точность</string>

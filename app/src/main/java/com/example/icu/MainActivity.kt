@@ -38,11 +38,13 @@ import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -1007,14 +1009,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun showTracksScreenIfVisible() {
         if (sectionPanel.visibility == View.VISIBLE && currentSection == Section.TRACKS) {
+            if (isSearchInputFocused()) return
             showTracksScreen()
         }
     }
 
     private fun showPointsScreenIfVisible() {
         if (sectionPanel.visibility == View.VISIBLE && currentSection == Section.POINTS) {
+            if (isSearchInputFocused()) return
             showPointsScreen()
         }
+    }
+
+    private fun isSearchInputFocused(): Boolean {
+        return (currentFocus as? TextInputEditText)?.tag == SEARCH_INPUT_TAG
     }
 
     private fun showSnackbar(message: String, isLong: Boolean = false) {
@@ -2398,7 +2406,7 @@ class MainActivity : AppCompatActivity() {
         pageTracks.groupBy { GpxTrackStore.monthKey(it) }
             .toSortedMap(compareByDescending<YearMonth> { it.year }.thenByDescending { it.monthValue })
             .forEach { (month, monthTracks) ->
-                content.addView(groupTitle(formatMonthTitle(month)))
+                content.addView(trackGroupTitle(formatMonthTitle(month)))
                 monthTracks.sortedByDescending { it.startedAtMillis }.forEach { track ->
                     content.addView(trackCard(track))
                 }
@@ -3578,37 +3586,89 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun trackGroupTitle(title: String): TextView {
+        return groupTitle(title).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(8)
+                bottomMargin = dp(10)
+            }
+        }
+    }
+
     private fun searchField(
         hint: String,
         includeCalendar: Boolean,
         initialValue: String,
         onCalendarClick: ((TextInputEditText) -> Unit)? = null,
         onQueryChanged: (String) -> Unit
-    ): Pair<TextInputLayout, TextInputEditText> {
+    ): Pair<View, TextInputEditText> {
         val input = TextInputEditText(this).apply {
             setText(initialValue)
             setSingleLine(true)
             inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            tag = SEARCH_INPUT_TAG
+            setOnEditorActionListener { _, actionId, _ ->
+                actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE
+            }
+            setOnKeyListener { _, keyCode, event ->
+                keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP
+            }
         }
         val layout = TextInputLayout(this).apply {
             this.hint = hint
             boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
             setStartIconDrawable(R.drawable.ic_search)
-            if (includeCalendar) {
-                endIconMode = TextInputLayout.END_ICON_CUSTOM
-                setEndIconDrawable(R.drawable.ic_calendar)
-                setEndIconContentDescription(R.string.pick_track_date)
-                setEndIconOnClickListener { onCalendarClick?.invoke(input) }
-            }
+            endIconMode = TextInputLayout.END_ICON_CLEAR_TEXT
             addView(input)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                leftMargin = dp(20)
-                topMargin = dp(12)
-                rightMargin = dp(20)
-                bottomMargin = dp(12)
+        }
+        val root: View = if (includeCalendar) {
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    leftMargin = dp(20)
+                    topMargin = dp(12)
+                    rightMargin = dp(20)
+                    bottomMargin = dp(8)
+                }
+                addView(layout, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(MaterialButton(this@MainActivity).apply {
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                    background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
+                    elevation = 0f
+                    stateListAnimator = null
+                    minWidth = 0
+                    minimumWidth = 0
+                    minimumHeight = dp(56)
+                    setPadding(0, 0, 0, 0)
+                    setIconResource(R.drawable.ic_calendar)
+                    iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+                    iconPadding = 0
+                    contentDescription = getString(R.string.pick_track_date)
+                    setOnClickListener { onCalendarClick?.invoke(input) }
+                    layoutParams = LinearLayout.LayoutParams(dp(56), dp(56)).apply {
+                        leftMargin = dp(8)
+                    }
+                })
+            }
+        } else {
+            layout.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    leftMargin = dp(20)
+                    topMargin = dp(12)
+                    rightMargin = dp(20)
+                    bottomMargin = dp(8)
+                }
             }
         }
         input.addTextChangedListener(object : TextWatcher {
@@ -3618,7 +3678,7 @@ class MainActivity : AppCompatActivity() {
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
-        return layout to input
+        return root to input
     }
 
     private fun trackCard(track: RecordedTrack): View {
@@ -5088,5 +5148,6 @@ class MainActivity : AppCompatActivity() {
         private const val FRIEND_TOOLTIP_DELAY_MS = 80L
         private const val TRACK_SAVED_SNACKBAR_MS = 10_000
         private const val CHANGELOG_ASSET_NAME = "CHANGELOG.md"
+        private const val SEARCH_INPUT_TAG = "icu_search_input"
     }
 }
