@@ -299,6 +299,7 @@ class MainActivity : AppCompatActivity() {
         handleAuthCallback(intent)
         handleFriendInvite(intent)
         handlePointShare(intent)
+        handleTrackShare(intent)
         handleFileOpenIntent(intent)
 
         if (hasLocationPermission()) {
@@ -361,6 +362,7 @@ class MainActivity : AppCompatActivity() {
         handleAuthCallback(intent)
         handleFriendInvite(intent)
         handlePointShare(intent)
+        handleTrackShare(intent)
         handleFileOpenIntent(intent)
     }
 
@@ -693,6 +695,33 @@ class MainActivity : AppCompatActivity() {
                         showSnackbar(getString(R.string.no_waypoints_in_file), isLong = true)
                     } else {
                         showImportPointsDialog(points)
+                    }
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun handleTrackShare(intent: Intent?) {
+        val data = intent?.data ?: return
+        val isAppShare = data.scheme == "icu" && data.host == "track-share"
+        val isHttpsShare = data.scheme == "https" &&
+            data.host == "jjinirtbtgkyesewvyux.supabase.co" &&
+            data.path == "/functions/v1/track-share"
+        if (!isAppShare && !isHttpsShare) return
+        val token = data.getQueryParameter("token") ?: return
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.fetchTrackShare(token)
+            }.onSuccess { tracks ->
+                runOnUiThread {
+                    if (tracks.isEmpty()) {
+                        showSnackbar(getString(R.string.no_tracks_in_file), isLong = true)
+                    } else {
+                        showImportTracksDialog(tracks)
                     }
                 }
             }.onFailure { error ->
@@ -2681,8 +2710,8 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-        sectionContent.addView(tabs)
         sectionContent.addView(searchInput.first)
+        sectionContent.addView(tabs)
         sectionContent.addView(selectionRowHost)
         sectionContent.addView(listHost)
         pages.forEach { page -> tabs.addTab(tabs.newTab().setText(page.title)) }
@@ -3265,29 +3294,58 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showImportPointsDialog(points: List<ImportedWaypoint>) {
-        val selected = BooleanArray(points.size) { true }
+        val existingKeys = savedPointStore.loadPoints()
+            .map { pointImportKey(it.name, it.latitude, it.longitude) }
+            .toMutableSet()
+        val candidates = points.map { point ->
+            val title = point.name.ifBlank { SavedPointStore.defaultPointName(point.timeMillis ?: System.currentTimeMillis()) }
+            val key = pointImportKey(title, point.latitude, point.longitude)
+            val duplicate = existingKeys.contains(key)
+            existingKeys.add(key)
+            PointImportCandidate(
+                point = point.copy(name = title),
+                title = title,
+                duplicate = duplicate
+            )
+        }
+        val selected = BooleanArray(candidates.size) { index -> !candidates[index].duplicate }
         lateinit var importButtonUpdater: () -> Unit
         val listContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
         val selectToggle = MaterialCheckBox(this).apply {
             text = getString(R.string.select_all)
-            isChecked = true
+            isChecked = candidates.any { !it.duplicate } && selected.withIndex().all { (index, value) ->
+                candidates[index].duplicate || value
+            }
             setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
             textSize = 14f
         }
+        fun selectedImportCount(): Int = selected.withIndex().count { (index, value) ->
+            value && !candidates[index].duplicate
+        }
         fun renderRows() {
             listContainer.removeAllViews()
-            points.forEachIndexed { index, point ->
+            candidates.forEachIndexed { index, candidate ->
                 listContainer.addView(MaterialCheckBox(this).apply {
-                    text = point.name.ifBlank { SavedPointStore.defaultPointName(System.currentTimeMillis()) }
+                    text = if (candidate.duplicate) {
+                        "${candidate.title} \u00B7 ${getString(R.string.already_imported)}"
+                    } else {
+                        candidate.title
+                    }
+                    isEnabled = !candidate.duplicate
                     isChecked = selected[index]
+                    alpha = if (candidate.duplicate) 0.45f else 1f
                     setOnCheckedChangeListener { _, checked ->
                         selected[index] = checked
                         selectToggle.setOnCheckedChangeListener(null)
-                        selectToggle.isChecked = selected.all { it }
+                        selectToggle.isChecked = candidates.withIndex().all { (candidateIndex, item) ->
+                            item.duplicate || selected[candidateIndex]
+                        }
                         selectToggle.setOnCheckedChangeListener { _, masterChecked ->
-                            selected.indices.forEach { selected[it] = masterChecked }
+                            candidates.forEachIndexed { candidateIndex, item ->
+                                if (!item.duplicate) selected[candidateIndex] = masterChecked
+                            }
                             renderRows()
                             importButtonUpdater()
                         }
@@ -3314,7 +3372,9 @@ class MainActivity : AppCompatActivity() {
         }
         renderRows()
         selectToggle.setOnCheckedChangeListener { _, checked ->
-            selected.indices.forEach { selected[it] = checked }
+            candidates.forEachIndexed { index, candidate ->
+                if (!candidate.duplicate) selected[index] = checked
+            }
             renderRows()
             importButtonUpdater()
         }
@@ -3327,10 +3387,12 @@ class MainActivity : AppCompatActivity() {
         dialog.setOnShowListener {
             val positive = dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
             importButtonUpdater = {
-                positive.isEnabled = selected.any { it }
+                positive.isEnabled = selectedImportCount() > 0
             }
             positive.setOnClickListener {
-                val selectedPoints = points.filterIndexed { index, _ -> selected[index] }
+                val selectedPoints = candidates.filterIndexed { index, candidate ->
+                    selected[index] && !candidate.duplicate
+                }.map { it.point }
                 importWaypoints(selectedPoints)
                 dialog.dismiss()
             }
@@ -4299,6 +4361,8 @@ class MainActivity : AppCompatActivity() {
             background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
             elevation = 0f
             stateListAnimator = null
+            insetTop = 0
+            insetBottom = 0
             minWidth = 0
             minimumWidth = 0
             minimumHeight = dp(48)
@@ -4476,6 +4540,8 @@ class MainActivity : AppCompatActivity() {
                     background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
                     elevation = 0f
                     stateListAnimator = null
+                    insetTop = 0
+                    insetBottom = 0
                     minWidth = 0
                     minimumWidth = 0
                     minimumHeight = dp(56)
@@ -4815,22 +4881,41 @@ class MainActivity : AppCompatActivity() {
             return
         }
         backgroundExecutor.execute {
-            runCatching {
+            val zipFile = runCatching {
                 File(
                     GpxExchange.exportDirectory(this),
                     GpxExchange.safeFileName("ICU tracks ${System.currentTimeMillis()}", "zip")
                 ).also { file ->
                     GpxExchange.zipTrackFiles(file, selected)
                 }
-            }.onSuccess { file ->
-                val text = getString(R.string.share_tracks_count, selected.size)
+            }
+            if (zipFile.isFailure) {
                 runOnUiThread {
-                    shareFile(file, "application/zip", text, getString(R.string.share_tracks_title))
+                    showSnackbar(getString(R.string.export_failed, userMessage(zipFile.exceptionOrNull() ?: RuntimeException())), isLong = true)
                 }
-            }.onFailure { error ->
+                return@execute
+            }
+
+            val link = runCatching {
+                val session = sessionStore.current() ?: return@runCatching null
+                val token = supabaseClient.createTrackShare(session, selected)
+                "${SupabaseConfig.TRACK_SHARE_URL}?token=$token"
+            }.getOrNull()
+
+            if (link == null && sessionStore.current() != null) {
                 runOnUiThread {
-                    showSnackbar(getString(R.string.export_failed, userMessage(error)), isLong = true)
+                    showSnackbar(getString(R.string.track_share_link_failed), isLong = true)
                 }
+            }
+            val text = buildString {
+                append(getString(R.string.share_tracks_count, selected.size))
+                if (link != null) {
+                    append("\n")
+                    append(link)
+                }
+            }
+            runOnUiThread {
+                shareFile(zipFile.getOrThrow(), "application/zip", text, getString(R.string.share_tracks_title))
             }
         }
     }
@@ -6186,6 +6271,12 @@ class MainActivity : AppCompatActivity() {
 
     private data class TrackImportCandidate(
         val track: ImportedTrack,
+        val title: String,
+        val duplicate: Boolean
+    )
+
+    private data class PointImportCandidate(
+        val point: ImportedWaypoint,
         val title: String,
         val duplicate: Boolean
     )

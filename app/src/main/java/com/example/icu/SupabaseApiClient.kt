@@ -7,6 +7,7 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 import java.time.Instant
+import java.util.Base64
 import java.util.Locale
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
@@ -279,6 +280,59 @@ class SupabaseApiClient(
                 latitude = latitude,
                 longitude = longitude,
                 timeMillis = null
+            )
+        }
+    }
+
+    fun createTrackShare(session: SupabaseSession, tracks: List<RecordedTrack>): String {
+        val payload = JSONArray()
+        tracks.forEach { track ->
+            val gpxBytes = track.file.readBytes()
+            payload.put(JSONObject()
+                .put("name", track.name)
+                .put("type", track.type.gpxType)
+                .put("visible", track.visible)
+                .put("gpx", Base64.getEncoder().encodeToString(gpxBytes))
+            )
+        }
+        val body = JSONObject()
+            .put("created_by", session.userId)
+            .put("payload", payload)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        val response = request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/track_share_packages",
+            headers = authHeaders(session) + mapOf(
+                "Content-Type" to "application/json",
+                "Prefer" to "return=representation"
+            ),
+            body = body
+        )
+        val array = JSONArray(response.text)
+        return array.getJSONObject(0).getString("token")
+    }
+
+    fun fetchTrackShare(token: String): List<ImportedTrack> {
+        val response = request(
+            method = "GET",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/track_share_packages?select=payload&token=eq.${token.urlEncoded()}&limit=1",
+            headers = jsonHeaders()
+        )
+        val array = JSONArray(response.text)
+        if (array.length() == 0) return emptyList()
+        val payload = array.getJSONObject(0).getJSONArray("payload")
+        return (0 until payload.length()).mapNotNull { index ->
+            val item = payload.optJSONObject(index) ?: return@mapNotNull null
+            val gpx = item.optString("gpx", "")
+            if (gpx.isBlank()) return@mapNotNull null
+            val bytes = runCatching { Base64.getDecoder().decode(gpx) }.getOrNull() ?: return@mapNotNull null
+            val parsed = runCatching { GpxExchange.parseTracks(bytes) }.getOrDefault(emptyList()).firstOrNull()
+                ?: return@mapNotNull null
+            parsed.copy(
+                name = item.optString("name", parsed.name.orEmpty()).ifBlank { parsed.name },
+                type = TrackType.entries.firstOrNull { it.gpxType == item.optString("type") } ?: parsed.type,
+                visible = item.optBoolean("visible", parsed.visible)
             )
         }
     }

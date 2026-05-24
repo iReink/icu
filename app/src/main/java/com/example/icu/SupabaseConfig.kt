@@ -7,4 +7,5 @@ object SupabaseConfig {
     const val AUTH_REDIRECT_URI = "icu://auth-callback"
     const val FRIEND_INVITE_URL = "$PROJECT_URL/functions/v1/friend-invite"
     const val POINT_SHARE_URL = "$PROJECT_URL/functions/v1/point-share"
+    const val TRACK_SHARE_URL = "$PROJECT_URL/functions/v1/track-share"
 }

@@ -136,7 +136,7 @@
     <string name="location_broadcast_channel_name">Трансляция геопозиции</string>
     <string name="loading">Загрузка…</string>
     <string name="no_friends">Пока нет друзей</string>
-    <string name="add_friend_by_link">Добавить друга по ссылке</string>
+    <string name="add_friend_by_link">Добавить друга</string>
     <string name="friend_invite_share_text">Добавь меня в друзья в ICU: %1$s</string>
     <string name="friend_added">Друг добавлен</string>
     <string name="sign_in_to_accept_friend">Войдите, чтобы принять приглашение в друзья</string>
@@ -186,4 +186,5 @@
     <string name="export_failed">Не удалось подготовить экспорт: %1$s</string>
     <string name="point_share_sign_in">Войдите, чтобы создать ссылку ICU для точки</string>
     <string name="point_share_link_failed">Не удалось создать ICU-ссылку, отправляю только GPX</string>
+    <string name="track_share_link_failed">Не удалось создать ICU-ссылку, отправляю только ZIP</string>
 </resources>
