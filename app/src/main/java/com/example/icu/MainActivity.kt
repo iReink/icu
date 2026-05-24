@@ -29,11 +29,13 @@ import android.os.Handler
 import android.os.Looper
 import android.text.Editable
 import android.text.InputType
+import android.text.SpannableString
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.TextWatcher
 import android.text.method.PasswordTransformationMethod
 import android.text.style.BulletSpan
+import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.view.Gravity
@@ -1478,7 +1480,7 @@ class MainActivity : AppCompatActivity() {
         val point = tooltipPoint ?: trackTooltipPoint(track)
         val delay = if (fitToScreen) TRACK_FOCUS_TOOLTIP_DELAY_MS else 0L
         elapsedHandler.postDelayed({
-            showTrackTooltip(track, point)
+            showTrackDetailsSheet(track, point)
         }, delay)
     }
 
@@ -1556,6 +1558,19 @@ class MainActivity : AppCompatActivity() {
                 })
             })
         }
+    }
+
+    private fun showTrackDetailsSheet(track: RecordedTrack, _geoPoint: GeoPoint) {
+        showMapEntitySheet(
+            title = track.name,
+            subtitle = "${formatDistance(track.distanceMeters)} В· ${formatDuration(track.durationMillis)}",
+            holePoint = null,
+            holeOffsetYPx = 0,
+            menuContentDescription = getString(R.string.track_actions),
+            onMenuClick = { anchor, sheet ->
+                showTrackMenu(anchor, track, refreshScreen = false, onActionSelected = { sheet.dismiss() })
+            }
+        )
     }
 
     private fun showTrackTooltip(track: RecordedTrack, geoPoint: GeoPoint) {
@@ -1951,32 +1966,93 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSavedPointDetailsSheet(point: SavedPoint) {
-        showDestinationSheet(
+        showMapEntitySheet(
             title = point.name,
-            point = point.toGeoPoint(),
+            subtitle = getString(R.string.destination_distance, distanceToPoint(point.toGeoPoint())),
             holePoint = point.toGeoPoint(),
             holeOffsetYPx = savedPointHighlightOffset(point),
-            primaryText = null,
-            onPrimary = null,
-            secondaryText = if (point.visible) getString(R.string.hide_from_map) else getString(R.string.show_on_map),
-            onSecondary = {
-                savedPointStore.setPointVisibility(point, !point.visible)
-                skippedPointRefreshes = 1
-                syncTracksSilently()
-                loadSavedPointsOnMap()
-                showPointsScreenIfVisible()
-            },
-            tertiaryText = getString(R.string.rename),
-            onTertiary = { showRenamePointDialog(point) },
-            destructiveText = getString(R.string.delete_destination),
-            onDestructive = {
-                savedPointStore.deletePoint(point)
-                skippedPointRefreshes = 1
-                syncTracksSilently()
-                loadSavedPointsOnMap()
-                showPointsScreenIfVisible()
+            menuContentDescription = getString(R.string.point_actions),
+            onMenuClick = { anchor, sheet ->
+                showPointMenu(anchor, point, refreshScreen = false, onActionSelected = { sheet.dismiss() })
             }
         )
+    }
+
+    private fun showMapEntitySheet(
+        title: String,
+        subtitle: String,
+        holePoint: GeoPoint?,
+        holeOffsetYPx: Int,
+        menuContentDescription: String,
+        onMenuClick: (View, BottomSheetDialog) -> Unit
+    ) {
+        val sheet = BottomSheetDialog(this)
+        if (holePoint != null) {
+            showDestinationDimOverlay(holePoint, holeOffsetYPx)
+        }
+        sheet.setOnDismissListener {
+            hideDestinationDimOverlay()
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_bottom_sheet)
+            setPadding(dp(20), dp(14), dp(20), dp(28))
+            addView(View(this@MainActivity).apply {
+                setBackgroundResource(R.drawable.bg_sheet_handle)
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(6)).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    bottomMargin = dp(32)
+                }
+            })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(TextView(this@MainActivity).apply {
+                    text = title
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                    textSize = 28f
+                    typeface = Typeface.DEFAULT
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                addView(MaterialButton(this@MainActivity).apply {
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                    background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
+                    elevation = 0f
+                    stateListAnimator = null
+                    minWidth = 0
+                    minimumWidth = 0
+                    minimumHeight = dp(44)
+                    setPadding(0, 0, 0, 0)
+                    contentDescription = menuContentDescription
+                    setIconResource(R.drawable.ic_kebab_vertical)
+                    iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+                    iconPadding = 0
+                    setOnClickListener { anchor -> onMenuClick(anchor, sheet) }
+                    layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).apply {
+                        leftMargin = dp(8)
+                    }
+                })
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = subtitle
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                textSize = 16f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dp(12)
+                }
+            })
+        }
+        sheet.setContentView(content)
+        sheet.setOnShowListener { dialog ->
+            sheet.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            val bottomSheet = (dialog as BottomSheetDialog)
+                .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+            bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
+        }
+        sheet.show()
     }
 
     private fun showDestinationSheet(
@@ -2663,7 +2739,12 @@ class MainActivity : AppCompatActivity() {
         map.controller.animateTo(point.toGeoPoint())
     }
 
-    private fun showPointMenu(anchor: View, point: SavedPoint) {
+    private fun showPointMenu(
+        anchor: View,
+        point: SavedPoint,
+        refreshScreen: Boolean = true,
+        onActionSelected: (() -> Unit)? = null
+    ) {
         PopupMenu(this, anchor).apply {
             menu.add(0, POINT_ACTION_RENAME, 0, R.string.rename)
             menu.add(
@@ -2672,18 +2753,19 @@ class MainActivity : AppCompatActivity() {
                 1,
                 if (point.visible) R.string.hide_from_map else R.string.show_on_map
             )
-            menu.add(0, POINT_ACTION_DELETE, 2, R.string.delete)
+            menu.add(0, POINT_ACTION_DELETE, 2, destructiveMenuText(R.string.delete))
             setOnMenuItemClickListener { item ->
+                onActionSelected?.invoke()
                 when (item.itemId) {
-                    POINT_ACTION_RENAME -> showRenamePointDialog(point)
+                    POINT_ACTION_RENAME -> showRenamePointDialog(point, refreshScreen)
                     POINT_ACTION_VISIBILITY -> {
                         savedPointStore.setPointVisibility(point, !point.visible)
                         skippedPointRefreshes = 1
                         syncTracksSilently()
                         loadSavedPointsOnMap()
-                        showPointsScreen()
+                        if (refreshScreen) showPointsScreen()
                     }
-                    POINT_ACTION_DELETE -> showDeletePointDialog(point)
+                    POINT_ACTION_DELETE -> showDeletePointDialog(point, refreshScreen)
                 }
                 true
             }
@@ -2691,7 +2773,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showRenamePointDialog(point: SavedPoint) {
+    private fun showRenamePointDialog(point: SavedPoint, refreshScreen: Boolean = true) {
         val input = EditText(this).apply {
             setText(point.name)
             selectAll()
@@ -2711,12 +2793,12 @@ class MainActivity : AppCompatActivity() {
                 skippedPointRefreshes = 1
                 syncTracksSilently()
                 loadSavedPointsOnMap()
-                showPointsScreen()
+                if (refreshScreen) showPointsScreen()
             }
             .show()
     }
 
-    private fun showDeletePointDialog(point: SavedPoint) {
+    private fun showDeletePointDialog(point: SavedPoint, refreshScreen: Boolean = true) {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.delete_point_title)
             .setMessage(getString(R.string.delete_point_message_named, point.name))
@@ -2726,7 +2808,7 @@ class MainActivity : AppCompatActivity() {
                 skippedPointRefreshes = 1
                 syncTracksSilently()
                 loadSavedPointsOnMap()
-                showPointsScreen()
+                if (refreshScreen) showPointsScreen()
             }
             .show()
     }
@@ -3684,6 +3766,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun destructiveMenuText(stringResId: Int): SpannableString {
+        return SpannableString(getString(stringResId)).apply {
+            setSpan(
+                ForegroundColorSpan(ContextCompat.getColor(this@MainActivity, R.color.icu_danger)),
+                0,
+                length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+        }
+    }
+
     private fun groupTitleWithAction(title: String, actionText: String, onAction: () -> Unit): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -3938,7 +4031,12 @@ class MainActivity : AppCompatActivity() {
         focusTrack(track)
     }
 
-    private fun showTrackMenu(anchor: View, track: RecordedTrack) {
+    private fun showTrackMenu(
+        anchor: View,
+        track: RecordedTrack,
+        refreshScreen: Boolean = true,
+        onActionSelected: (() -> Unit)? = null
+    ) {
         PopupMenu(this, anchor).apply {
             menu.add(0, TRACK_ACTION_RENAME, 0, R.string.rename)
             menu.add(
@@ -3947,10 +4045,11 @@ class MainActivity : AppCompatActivity() {
                 1,
                 if (track.visible) R.string.hide_from_map else R.string.show_on_map
             )
-            menu.add(0, TRACK_ACTION_DELETE, 2, R.string.delete)
+            menu.add(0, TRACK_ACTION_DELETE, 2, destructiveMenuText(R.string.delete))
             setOnMenuItemClickListener { item ->
+                onActionSelected?.invoke()
                 when (item.itemId) {
-                    TRACK_ACTION_RENAME -> showRenameDialog(track)
+                    TRACK_ACTION_RENAME -> showRenameDialog(track, refreshScreen)
                     TRACK_ACTION_VISIBILITY -> {
                         if (focusedTrackFileName == track.file.name) clearTrackFocus()
                         val updated = trackStore.setTrackVisibility(track, !track.visible)
@@ -3958,9 +4057,9 @@ class MainActivity : AppCompatActivity() {
                         applySavedTrackOverlays(savedTracksForMap())
                         skippedTrackRefreshes = 2
                         syncTracksSilently()
-                        showTracksScreen()
+                        if (refreshScreen) showTracksScreen()
                     }
-                    TRACK_ACTION_DELETE -> showDeleteDialog(track)
+                    TRACK_ACTION_DELETE -> showDeleteDialog(track, refreshScreen)
                 }
                 true
             }
@@ -3968,7 +4067,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showRenameDialog(track: RecordedTrack) {
+    private fun showRenameDialog(track: RecordedTrack, refreshScreen: Boolean = true) {
         val input = EditText(this).apply {
             setText(track.name)
             selectAll()
@@ -3989,12 +4088,12 @@ class MainActivity : AppCompatActivity() {
                 applySavedTrackOverlays(savedTracksForMap())
                 skippedTrackRefreshes = 2
                 syncTracksSilently()
-                showTracksScreen()
+                if (refreshScreen) showTracksScreen()
             }
             .show()
     }
 
-    private fun showDeleteDialog(track: RecordedTrack) {
+    private fun showDeleteDialog(track: RecordedTrack, refreshScreen: Boolean = true) {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.delete_track_title)
             .setMessage(getString(R.string.delete_track_message_named, track.name))
@@ -4007,7 +4106,7 @@ class MainActivity : AppCompatActivity() {
                 applySavedTrackOverlays(savedTracksForMap())
                 skippedTrackRefreshes = 2
                 syncTracksSilently()
-                showTracksScreen()
+                if (refreshScreen) showTracksScreen()
             }
             .show()
     }
