@@ -114,6 +114,7 @@ import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity() {
@@ -191,9 +192,10 @@ class MainActivity : AppCompatActivity() {
     private var pointSearchQuery = ""
     private var isPointSelectionMode = false
     private var isTrackSelectionMode = false
+    private var hasInitializedPointSelection = false
+    private var hasInitializedTrackSelection = false
     private val selectedPointIds = mutableSetOf<String>()
     private val selectedTrackFileNames = mutableSetOf<String>()
-    private var pendingClipboardPoint: GeoPoint? = null
     private var skippedTrackRefreshes = 0
     private var skippedPointRefreshes = 0
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
@@ -297,6 +299,7 @@ class MainActivity : AppCompatActivity() {
         handleAuthCallback(intent)
         handleFriendInvite(intent)
         handlePointShare(intent)
+        handleFileOpenIntent(intent)
 
         if (hasLocationPermission()) {
             enableMyLocation(follow = true)
@@ -358,6 +361,7 @@ class MainActivity : AppCompatActivity() {
         handleAuthCallback(intent)
         handleFriendInvite(intent)
         handlePointShare(intent)
+        handleFileOpenIntent(intent)
     }
 
     private fun bindViews() {
@@ -566,12 +570,14 @@ class MainActivity : AppCompatActivity() {
     private fun handleSectionBack() {
         if (isPointSelectionMode) {
             isPointSelectionMode = false
+            hasInitializedPointSelection = false
             selectedPointIds.clear()
             showPointsScreen()
             return
         }
         if (isTrackSelectionMode) {
             isTrackSelectionMode = false
+            hasInitializedTrackSelection = false
             selectedTrackFileNames.clear()
             showTracksScreen()
             return
@@ -613,6 +619,43 @@ class MainActivity : AppCompatActivity() {
             showAuthEntry()
         } else {
             acceptFriendInvite(token)
+        }
+    }
+
+    private fun handleFileOpenIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        val path = uri.lastPathSegment.orEmpty().lowercase(Locale.US)
+        val mimeType = intent.type.orEmpty().lowercase(Locale.US)
+        when {
+            path.endsWith(".zip") || mimeType.contains("zip") -> importTracksFromFile(uri)
+            path.endsWith(".gpx") || mimeType.contains("gpx") || mimeType.contains("xml") -> importGpxFromExternalOpen(uri)
+        }
+    }
+
+    private fun importGpxFromExternalOpen(uri: Uri) {
+        backgroundExecutor.execute {
+            runCatching {
+                contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
+            }.onSuccess { bytes ->
+                val tracks = runCatching { GpxExchange.parseTracks(bytes) }.getOrDefault(emptyList())
+                if (tracks.isNotEmpty()) {
+                    runOnUiThread { showImportTracksDialog(tracks) }
+                    return@onSuccess
+                }
+                val waypoints = runCatching { GpxExchange.parseWaypoints(bytes) }.getOrDefault(emptyList())
+                runOnUiThread {
+                    if (waypoints.isNotEmpty()) {
+                        showImportPointsDialog(waypoints)
+                    } else {
+                        showSnackbar(getString(R.string.import_failed, getString(R.string.no_tracks_in_file)), isLong = true)
+                    }
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                }
+            }
         }
     }
 
@@ -1626,7 +1669,7 @@ class MainActivity : AppCompatActivity() {
     private fun showTrackDetailsSheet(track: RecordedTrack, _geoPoint: GeoPoint) {
         showMapEntitySheet(
             title = track.name,
-            subtitle = "${formatDistance(track.distanceMeters)} В· ${formatDuration(track.durationMillis)}",
+            subtitle = "${formatDistance(track.distanceMeters)} \u00B7 ${formatDuration(track.durationMillis)}",
             holePoint = null,
             holeOffsetYPx = 0,
             menuContentDescription = getString(R.string.track_actions),
@@ -2031,9 +2074,8 @@ class MainActivity : AppCompatActivity() {
     private fun showSavedPointDetailsSheet(point: SavedPoint) {
         showMapEntitySheet(
             title = point.name,
-            subtitle = getString(R.string.destination_distance, distanceToPoint(point.toGeoPoint())),
-            caption = GpxExchange.formatCoordinates(point.latitude, point.longitude),
-            onCaptionClick = {
+            subtitle = "${getString(R.string.destination_distance, distanceToPoint(point.toGeoPoint()))} \u00B7 ${GpxExchange.formatCoordinates(point.latitude, point.longitude)}",
+            onSubtitleClick = {
                 copyCoordinates(point)
             },
             holePoint = point.toGeoPoint(),
@@ -2048,6 +2090,7 @@ class MainActivity : AppCompatActivity() {
     private fun showMapEntitySheet(
         title: String,
         subtitle: String,
+        onSubtitleClick: (() -> Unit)? = null,
         caption: String? = null,
         onCaptionClick: (() -> Unit)? = null,
         holePoint: GeoPoint?,
@@ -2106,6 +2149,9 @@ class MainActivity : AppCompatActivity() {
                 text = subtitle
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
                 textSize = 16f
+                isClickable = onSubtitleClick != null
+                isFocusable = onSubtitleClick != null
+                setOnClickListener { onSubtitleClick?.invoke() }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -2528,6 +2574,7 @@ class MainActivity : AppCompatActivity() {
             addSectionIconAction(R.drawable.ic_import, getString(R.string.import_action)) { openTrackFilePicker() }
             addSectionIconAction(R.drawable.ic_share, getString(R.string.share)) {
                 isTrackSelectionMode = true
+                hasInitializedTrackSelection = false
                 selectedTrackFileNames.clear()
                 showTracksScreen()
             }
@@ -2589,8 +2636,9 @@ class MainActivity : AppCompatActivity() {
             val pageTracks = tracks
                 .filter { it.type == pages[position].type }
                 .filter { trackMatchesQuery(it, trackSearchQuery) }
-            if (isTrackSelectionMode && selectedTrackFileNames.isEmpty()) {
+            if (isTrackSelectionMode && !hasInitializedTrackSelection) {
                 selectedTrackFileNames.addAll(pageTracks.map { it.file.name })
+                hasInitializedTrackSelection = true
             }
             selectionRowHost.removeAllViews()
             if (isTrackSelectionMode) {
@@ -2611,6 +2659,7 @@ class MainActivity : AppCompatActivity() {
             override fun onTabSelected(tab: TabLayout.Tab) {
                 if (isTrackSelectionMode && tab.position != selectedTrackListTab) {
                     selectedTrackFileNames.clear()
+                    hasInitializedTrackSelection = false
                 }
                 renderTrackTab(tab.position)
             }
@@ -2735,6 +2784,7 @@ class MainActivity : AppCompatActivity() {
             addSectionIconAction(R.drawable.ic_import, getString(R.string.import_action)) { startPointImport() }
             addSectionIconAction(R.drawable.ic_share, getString(R.string.share)) {
                 isPointSelectionMode = true
+                hasInitializedPointSelection = false
                 selectedPointIds.clear()
                 showPointsScreen()
             }
@@ -2781,8 +2831,9 @@ class MainActivity : AppCompatActivity() {
                 listHost.addView(emptyStateText(getString(R.string.no_search_results)))
                 return@render
             }
-            if (isPointSelectionMode && selectedPointIds.isEmpty()) {
+            if (isPointSelectionMode && !hasInitializedPointSelection) {
                 selectedPointIds.addAll(filteredPoints.map { it.id })
+                hasInitializedPointSelection = true
             }
             if (isPointSelectionMode) {
                 selectionRowHost.addView(selectionMasterRow(
@@ -3015,6 +3066,7 @@ class MainActivity : AppCompatActivity() {
         val selected = visiblePoints.filter { selectedPointIds.contains(it.id) }
         if (selected.isEmpty()) return
         isPointSelectionMode = false
+        hasInitializedPointSelection = false
         selectedPointIds.clear()
         showPointsScreen()
         sharePoints(selected)
@@ -3082,13 +3134,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun startPointImport() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
-        val point = CoordinateParser.parseFirst(text)
+        val text = runCatching {
+            clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+        }.getOrDefault("")
+        val point = runCatching {
+            CoordinateParser.parseFirst(text.take(MAX_CLIPBOARD_PARSE_CHARS))
+        }.getOrNull()
         if (point == null) {
             openPointFilePicker()
             return
         }
-        pendingClipboardPoint = point
         showClipboardImportDialog(point)
     }
 
@@ -3115,7 +3170,6 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.import_from_clipboard)
             .setView(container)
             .setNeutralButton(R.string.import_from_file) { _, _ -> openPointFilePicker() }
-            .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.import_action_full) { _, _ ->
                 importWaypoints(listOf(ImportedWaypoint(
                     name = input.text.toString().trim().ifBlank { SavedPointStore.defaultPointName(System.currentTimeMillis()) },
@@ -3160,11 +3214,11 @@ class MainActivity : AppCompatActivity() {
         val listContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
-        val selectToggle = MaterialButton(this).apply {
-            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
-            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
-            isAllCaps = false
-            text = getString(R.string.select_none)
+        val selectToggle = MaterialCheckBox(this).apply {
+            text = getString(R.string.select_all)
+            isChecked = true
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+            textSize = 14f
         }
         fun renderRows() {
             listContainer.removeAllViews()
@@ -3174,7 +3228,13 @@ class MainActivity : AppCompatActivity() {
                     isChecked = selected[index]
                     setOnCheckedChangeListener { _, checked ->
                         selected[index] = checked
-                        selectToggle.text = if (selected.all { it }) getString(R.string.select_none) else getString(R.string.select_all)
+                        selectToggle.setOnCheckedChangeListener(null)
+                        selectToggle.isChecked = selected.all { it }
+                        selectToggle.setOnCheckedChangeListener { _, masterChecked ->
+                            selected.indices.forEach { selected[it] = masterChecked }
+                            renderRows()
+                            importButtonUpdater()
+                        }
                         importButtonUpdater()
                     }
                 })
@@ -3197,10 +3257,8 @@ class MainActivity : AppCompatActivity() {
             ))
         }
         renderRows()
-        selectToggle.setOnClickListener {
-            val newValue = !selected.all { it }
-            selected.indices.forEach { selected[it] = newValue }
-            selectToggle.text = if (newValue) getString(R.string.select_none) else getString(R.string.select_all)
+        selectToggle.setOnCheckedChangeListener { _, checked ->
+            selected.indices.forEach { selected[it] = checked }
             renderRows()
             importButtonUpdater()
         }
@@ -4666,6 +4724,7 @@ class MainActivity : AppCompatActivity() {
         val selected = visibleTracks.filter { selectedTrackFileNames.contains(it.file.name) }
         if (selected.isEmpty()) return
         isTrackSelectionMode = false
+        hasInitializedTrackSelection = false
         selectedTrackFileNames.clear()
         showTracksScreen()
         if (selected.size == 1) {
@@ -4681,9 +4740,7 @@ class MainActivity : AppCompatActivity() {
                     GpxExchange.zipTrackFiles(file, selected)
                 }
             }.onSuccess { file ->
-                val text = selected.joinToString("\n") { track ->
-                    "${track.name}: ${formatDistance(track.distanceMeters)} · ${formatTrackDate(track.startedAtMillis)}"
-                }
+                val text = getString(R.string.share_tracks_count, selected.size)
                 runOnUiThread {
                     shareFile(file, "application/zip", text, getString(R.string.share_tracks_title))
                 }
@@ -4712,13 +4769,136 @@ class MainActivity : AppCompatActivity() {
             runCatching {
                 val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
                 val fileName = uri.lastPathSegment.orEmpty().lowercase(Locale.US)
-                val importedTracks = if (fileName.endsWith(".zip") || bytes.take(2).toByteArray().contentEquals(byteArrayOf(0x50.toByte(), 0x4B.toByte()))) {
+                if (fileName.endsWith(".zip") || bytes.take(2).toByteArray().contentEquals(byteArrayOf(0x50.toByte(), 0x4B.toByte()))) {
                     GpxExchange.unzipGpxFiles(bytes).flatMap { (_, gpxBytes) -> GpxExchange.parseTracks(gpxBytes) }
                 } else {
                     GpxExchange.parseTracks(bytes)
                 }
-                if (importedTracks.isEmpty()) throw IllegalArgumentException(getString(R.string.no_tracks_in_file))
-                importedTracks.map { trackStore.saveImportedTrack(it) }
+            }.onSuccess { importedTracks ->
+                runOnUiThread {
+                    if (importedTracks.isEmpty()) {
+                        showSnackbar(getString(R.string.import_failed, getString(R.string.no_tracks_in_file)), isLong = true)
+                    } else {
+                        showImportTracksDialog(importedTracks)
+                    }
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun showImportTracksDialog(tracks: List<ImportedTrack>) {
+        val localTracks = if (hasLoadedSavedTracks) allSavedTracks else trackStore.loadTracks()
+        val existingFingerprints = localTracks.map { trackFingerprint(it) }.toSet()
+        val candidates = tracks.map { track ->
+            TrackImportCandidate(
+                track = track,
+                title = track.name?.takeIf { it.isNotBlank() }
+                    ?: GpxTrackStore.defaultTrackName(track.type ?: TrackType.CUSTOM, track.points.first().timeMillis),
+                duplicate = existingFingerprints.contains(trackFingerprint(track))
+            )
+        }
+        val selected = BooleanArray(candidates.size) { index -> !candidates[index].duplicate }
+        lateinit var importButtonUpdater: () -> Unit
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val selectToggle = MaterialCheckBox(this).apply {
+            text = getString(R.string.select_all)
+            isChecked = candidates.any { !it.duplicate } && selected.withIndex().all { (index, value) ->
+                candidates[index].duplicate || value
+            }
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+            textSize = 14f
+        }
+        fun selectedImportCount(): Int = selected.withIndex().count { (index, value) ->
+            value && !candidates[index].duplicate
+        }
+        fun renderRows() {
+            listContainer.removeAllViews()
+            candidates.forEachIndexed { index, candidate ->
+                listContainer.addView(MaterialCheckBox(this).apply {
+                    text = if (candidate.duplicate) {
+                        "${candidate.title} · ${getString(R.string.already_imported)}"
+                    } else {
+                        candidate.title
+                    }
+                    isEnabled = !candidate.duplicate
+                    isChecked = selected[index]
+                    alpha = if (candidate.duplicate) 0.45f else 1f
+                    setOnCheckedChangeListener { _, checked ->
+                        selected[index] = checked
+                        selectToggle.setOnCheckedChangeListener(null)
+                        selectToggle.isChecked = candidates.withIndex().all { (candidateIndex, item) ->
+                            item.duplicate || selected[candidateIndex]
+                        }
+                        selectToggle.setOnCheckedChangeListener { _, masterChecked ->
+                            candidates.forEachIndexed { candidateIndex, item ->
+                                if (!item.duplicate) selected[candidateIndex] = masterChecked
+                            }
+                            renderRows()
+                            importButtonUpdater()
+                        }
+                        importButtonUpdater()
+                    }
+                })
+            }
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.import_tracks_caption)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 14f
+            })
+            addView(selectToggle)
+            addView(ScrollView(this@MainActivity).apply {
+                addView(listContainer)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(280)
+            ))
+        }
+        renderRows()
+        selectToggle.setOnCheckedChangeListener { _, checked ->
+            candidates.forEachIndexed { index, candidate ->
+                if (!candidate.duplicate) selected[index] = checked
+            }
+            renderRows()
+            importButtonUpdater()
+        }
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.import_tracks_title)
+            .setView(content)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.import_action_full, null)
+            .create()
+        dialog.setOnShowListener {
+            val positive = dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+            importButtonUpdater = {
+                positive.isEnabled = selectedImportCount() > 0
+            }
+            positive.setOnClickListener {
+                val tracksToImport = candidates.filterIndexed { index, candidate ->
+                    selected[index] && !candidate.duplicate
+                }.map { it.track }
+                importSelectedTracks(tracksToImport)
+                dialog.dismiss()
+            }
+            importButtonUpdater()
+        }
+        dialog.show()
+    }
+
+    private fun importSelectedTracks(tracks: List<ImportedTrack>) {
+        if (tracks.isEmpty()) return
+        backgroundExecutor.execute {
+            runCatching {
+                tracks.map { trackStore.saveImportedTrack(it) }
             }.onSuccess { imported ->
                 allSavedTracks = (allSavedTracks + imported)
                     .distinctBy { it.file.name }
@@ -4737,6 +4917,23 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun trackFingerprint(track: RecordedTrack): String {
+        return trackFingerprint(track.type, track.points, track.distanceMeters)
+    }
+
+    private fun trackFingerprint(track: ImportedTrack): String {
+        return trackFingerprint(track.type ?: TrackType.CUSTOM, track.points, track.distanceMeters ?: GpxTrackStore.calculateDistance(track.points))
+    }
+
+    private fun trackFingerprint(type: TrackType, points: List<TrackPoint>, distanceMeters: Float): String {
+        val pointHash = points.joinToString("|") { point ->
+            String.format(Locale.US, "%.5f,%.5f,%d", point.latitude, point.longitude, point.timeMillis / 1000L)
+        }.hashCode()
+        val first = points.firstOrNull()?.timeMillis ?: 0L
+        val last = points.lastOrNull()?.timeMillis ?: 0L
+        return listOf(type.gpxType, points.size, first / 1000L, last / 1000L, distanceMeters.roundToInt(), pointHash).joinToString(":")
     }
 
     private fun shareFile(file: File, mimeType: String, text: String, chooserTitle: String) {
@@ -5904,6 +6101,12 @@ class MainActivity : AppCompatActivity() {
         val distancePx: Double
     )
 
+    private data class TrackImportCandidate(
+        val track: ImportedTrack,
+        val title: String,
+        val duplicate: Boolean
+    )
+
     private enum class Section {
         NONE,
         TRACKS,
@@ -6099,6 +6302,7 @@ class MainActivity : AppCompatActivity() {
         private const val TRACK_SAVED_SNACKBAR_MS = 10_000
         private const val CHANGELOG_ASSET_NAME = "CHANGELOG.md"
         private const val SEARCH_INPUT_TAG = "icu_search_input"
+        private const val MAX_CLIPBOARD_PARSE_CHARS = 4_000
         private const val DRAG_SCROLL_ZONE_DP = 132
         private const val DRAG_SCROLL_MAX_STEP_DP = 24
     }

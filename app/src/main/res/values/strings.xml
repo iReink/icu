@@ -167,11 +167,15 @@
     <string name="share_points_title">Точки ICU</string>
     <string name="share_track_text">%1$s\n%2$s · %3$s\n%4$s</string>
     <string name="share_tracks_title">Треки ICU</string>
+    <string name="share_tracks_count">Треки ICU\nМаршрутов: %1$d</string>
     <string name="import_from_clipboard">Импорт из буфера</string>
-    <string name="import_from_file">Импортировать из файла</string>
+    <string name="import_from_file">Из файла</string>
     <string name="import_action_full">Импортировать</string>
     <string name="import_points_title">Импорт точек</string>
     <string name="import_points_caption">Выбранные точки будут добавлены в вашу коллекцию и показаны на карте</string>
+    <string name="import_tracks_title">Импорт треков</string>
+    <string name="import_tracks_caption">Выбранные треки будут добавлены в список маршрутов и показаны на карте</string>
+    <string name="already_imported">уже есть</string>
     <string name="select_none">Снять выбор</string>
     <string name="select_all">Выбрать всё</string>
     <string name="no_waypoints_in_file">В файле нет точек</string>
