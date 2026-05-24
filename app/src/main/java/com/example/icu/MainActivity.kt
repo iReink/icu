@@ -623,13 +623,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleFileOpenIntent(intent: Intent?) {
-        if (intent?.action != Intent.ACTION_VIEW) return
-        val uri = intent.data ?: return
+        val action = intent?.action ?: return
+        val uri = when (action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND -> intent.sharedStreamUri()
+            else -> null
+        } ?: return
         val path = uri.lastPathSegment.orEmpty().lowercase(Locale.US)
         val mimeType = intent.type.orEmpty().lowercase(Locale.US)
         when {
             path.endsWith(".zip") || mimeType.contains("zip") -> importTracksFromFile(uri)
-            path.endsWith(".gpx") || mimeType.contains("gpx") || mimeType.contains("xml") -> importGpxFromExternalOpen(uri)
+            path.endsWith(".gpx") ||
+                mimeType.contains("gpx") ||
+                mimeType.contains("xml") ||
+                mimeType == "application/octet-stream" ||
+                mimeType == "text/plain" -> importGpxFromExternalOpen(uri)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun Intent.sharedStreamUri(): Uri? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
         }
     }
 
@@ -2074,8 +2091,10 @@ class MainActivity : AppCompatActivity() {
     private fun showSavedPointDetailsSheet(point: SavedPoint) {
         showMapEntitySheet(
             title = point.name,
-            subtitle = "${getString(R.string.destination_distance, distanceToPoint(point.toGeoPoint()))} \u00B7 ${GpxExchange.formatCoordinates(point.latitude, point.longitude)}",
-            onSubtitleClick = {
+            subtitle = null,
+            subtitleStart = GpxExchange.formatCoordinates(point.latitude, point.longitude),
+            subtitleEnd = distanceToPoint(point.toGeoPoint()),
+            onSubtitleStartClick = {
                 copyCoordinates(point)
             },
             holePoint = point.toGeoPoint(),
@@ -2089,8 +2108,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun showMapEntitySheet(
         title: String,
-        subtitle: String,
+        subtitle: String?,
         onSubtitleClick: (() -> Unit)? = null,
+        subtitleStart: String? = null,
+        subtitleEnd: String? = null,
+        onSubtitleStartClick: (() -> Unit)? = null,
         caption: String? = null,
         onCaptionClick: (() -> Unit)? = null,
         holePoint: GeoPoint?,
@@ -2145,20 +2167,54 @@ class MainActivity : AppCompatActivity() {
                     }
                 })
             })
-            addView(TextView(this@MainActivity).apply {
-                text = subtitle
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
-                textSize = 16f
-                isClickable = onSubtitleClick != null
-                isFocusable = onSubtitleClick != null
-                setOnClickListener { onSubtitleClick?.invoke() }
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = dp(12)
-                }
-            })
+            if (!subtitleStart.isNullOrBlank() || !subtitleEnd.isNullOrBlank()) {
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(TextView(this@MainActivity).apply {
+                        text = subtitleStart.orEmpty()
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                        textSize = 15f
+                        isClickable = onSubtitleStartClick != null
+                        isFocusable = onSubtitleStartClick != null
+                        setOnClickListener { onSubtitleStartClick?.invoke() }
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = subtitleEnd.orEmpty()
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                        textSize = 16f
+                        gravity = Gravity.END
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            leftMargin = dp(16)
+                        }
+                    })
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        topMargin = dp(12)
+                    }
+                })
+            } else if (!subtitle.isNullOrBlank()) {
+                addView(TextView(this@MainActivity).apply {
+                    text = subtitle
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                    textSize = 16f
+                    isClickable = onSubtitleClick != null
+                    isFocusable = onSubtitleClick != null
+                    setOnClickListener { onSubtitleClick?.invoke() }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        topMargin = dp(12)
+                    }
+                })
+            }
             if (!caption.isNullOrBlank()) {
                 addView(TextView(this@MainActivity).apply {
                     text = caption
@@ -3285,12 +3341,39 @@ class MainActivity : AppCompatActivity() {
 
     private fun importWaypoints(points: List<ImportedWaypoint>) {
         if (points.isEmpty()) return
-        val imported = savedPointStore.saveImportedPoints(points)
+        val existingKeys = savedPointStore.loadPoints()
+            .map { pointImportKey(it.name, it.latitude, it.longitude) }
+            .toMutableSet()
+        val uniquePoints = points.filter { point ->
+            val name = point.name.ifBlank { SavedPointStore.defaultPointName(point.timeMillis ?: System.currentTimeMillis()) }
+            val key = pointImportKey(name, point.latitude, point.longitude)
+            if (existingKeys.contains(key)) {
+                false
+            } else {
+                existingKeys.add(key)
+                true
+            }
+        }
+        val skippedDuplicates = points.size - uniquePoints.size
+        val imported = savedPointStore.saveImportedPoints(uniquePoints)
         skippedPointRefreshes = 1
         syncTracksSilently()
         loadSavedPointsOnMap()
         if (currentSection == Section.POINTS) showPointsScreen()
-        showSnackbar(getString(R.string.imported_points, imported.size), isLong = true)
+        val message = if (skippedDuplicates > 0) {
+            "${getString(R.string.imported_points, imported.size)} \u00B7 \u043F\u0440\u043E\u043F\u0443\u0449\u0435\u043D\u043E \u0434\u0443\u0431\u043B\u0435\u0439: $skippedDuplicates"
+        } else {
+            getString(R.string.imported_points, imported.size)
+        }
+        showSnackbar(message, isLong = true)
+    }
+
+    private fun pointImportKey(name: String, latitude: Double, longitude: Double): String {
+        return listOf(
+            name.trim().lowercase(Locale.US),
+            String.format(Locale.US, "%.6f", latitude),
+            String.format(Locale.US, "%.6f", longitude)
+        ).joinToString("|")
     }
 
     private fun showToolsScreen() {

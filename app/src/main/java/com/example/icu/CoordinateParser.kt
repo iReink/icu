@@ -9,6 +9,8 @@ import kotlin.math.abs
 object CoordinateParser {
     private val decimalNumber = """[-+]?\d{1,3}(?:[.,]\d+)?"""
     private val decimalPairRegex = Regex("""($decimalNumber)\s*[,;\s]\s*($decimalNumber)""")
+    private val decimalCommaPairRegex = Regex("""(?<![\d.,+-])($decimalNumber)\s*[,;]\s*($decimalNumber)(?![\d.,])""")
+    private val decimalSpacePairRegex = Regex("""(?<![\d.,+-])([-+]?\d{1,3}[.,]\d+)\s+([-+]?\d{1,3}[.,]\d+)(?![\d.,])""")
     private val geoRegex = Regex("""geo:\s*($decimalNumber)\s*,\s*($decimalNumber)""", RegexOption.IGNORE_CASE)
     private val dmsRegex = Regex(
         """(\d{1,3})[°\s]+(\d{1,2})['′\s]+(\d{1,2}(?:[.,]\d+)?)?["″\s]*([NS])\D+(\d{1,3})[°\s]+(\d{1,2})['′\s]+(\d{1,2}(?:[.,]\d+)?)?["″\s]*([EW])""",
@@ -21,11 +23,11 @@ object CoordinateParser {
 
     fun parseFirst(text: String): GeoPoint? {
         val decoded = decode(text.trim())
-        parseGeoUri(decoded)?.let { return it }
-        parseQueryParams(decoded)?.let { return it }
-        parseDms(decoded)?.let { return it }
-        parseDegreesMinutes(decoded)?.let { return it }
-        return parseDecimal(decoded)
+        tryParse { parseGeoUri(decoded) }?.let { return it }
+        tryParse { parseQueryParams(decoded) }?.let { return it }
+        tryParse { parseDms(decoded) }?.let { return it }
+        tryParse { parseDegreesMinutes(decoded) }?.let { return it }
+        return tryParse { parseDecimal(decoded) }
     }
 
     private fun parseGeoUri(text: String): GeoPoint? {
@@ -46,10 +48,20 @@ object CoordinateParser {
     }
 
     private fun parseDecimal(text: String): GeoPoint? {
+        decimalCommaPairRegex.findAll(text).forEach { match ->
+            normalized(match.groupValues[1].num(), match.groupValues[2].num())?.let { return it }
+        }
+        decimalSpacePairRegex.findAll(text).forEach { match ->
+            normalized(match.groupValues[1].num(), match.groupValues[2].num())?.let { return it }
+        }
         decimalPairRegex.findAll(text).forEach { match ->
             normalized(match.groupValues[1].num(), match.groupValues[2].num())?.let { return it }
         }
         return null
+    }
+
+    private fun tryParse(block: () -> GeoPoint?): GeoPoint? {
+        return runCatching { block() }.getOrNull()
     }
 
     private fun parseDms(text: String): GeoPoint? {
