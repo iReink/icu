@@ -3000,8 +3000,7 @@ class MainActivity : AppCompatActivity() {
         ))
         sectionContent.addView(syncStatusText())
         sectionContent.addView(statisticsEntryCard())
-        sectionContent.addView(groupTitle(getString(R.string.friends)))
-        sectionContent.addView(tonalFullWidthButton(getString(R.string.add_friend_by_link)) {
+        sectionContent.addView(groupTitleWithAction(getString(R.string.friends), getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
         })
         sectionContent.addView(locationBroadcastRow())
@@ -3054,8 +3053,7 @@ class MainActivity : AppCompatActivity() {
         ))
         sectionContent.addView(syncStatusText())
         sectionContent.addView(statisticsEntryCard())
-        sectionContent.addView(groupTitle(getString(R.string.friends)))
-        sectionContent.addView(tonalFullWidthButton(getString(R.string.add_friend_by_link)) {
+        sectionContent.addView(groupTitleWithAction(getString(R.string.friends), getString(R.string.add_friend_by_link)) {
             shareFriendInvite()
         })
         sectionContent.addView(locationBroadcastRow())
@@ -3683,6 +3681,45 @@ class MainActivity : AppCompatActivity() {
                 topMargin = dp(18)
                 bottomMargin = dp(10)
             }
+        }
+    }
+
+    private fun groupTitleWithAction(title: String, actionText: String, onAction: () -> Unit): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(18)
+                bottomMargin = dp(8)
+            }
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 22f
+                typeface = Typeface.DEFAULT_BOLD
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            addView(MaterialButton(this@MainActivity).apply {
+                text = actionText
+                isAllCaps = false
+                letterSpacing = 0f
+                backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                elevation = 0f
+                stateListAnimator = null
+                minWidth = 0
+                minimumWidth = 0
+                minimumHeight = dp(40)
+                setPadding(dp(8), 0, dp(8), 0)
+                setOnClickListener { onAction() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    dp(40)
+                )
+            })
         }
     }
 
@@ -4347,7 +4384,15 @@ class MainActivity : AppCompatActivity() {
         onEdit: (() -> Unit)? = null,
         onSignOut: (() -> Unit)? = null
     ): View {
-        return contentCard().apply {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(8), 0, dp(8))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(8)
+            }
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -4416,25 +4461,6 @@ class MainActivity : AppCompatActivity() {
             text = textValue
             isAllCaps = false
             letterSpacing = 0f
-            setOnClickListener { onClick() }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(52)
-            ).apply {
-                bottomMargin = dp(12)
-            }
-        }
-    }
-
-    private fun tonalFullWidthButton(textValue: String, onClick: () -> Unit): View {
-        return MaterialButton(this).apply {
-            text = textValue
-            isAllCaps = false
-            letterSpacing = 0f
-            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_surface)
-            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
-            elevation = 0f
-            stateListAnimator = null
             setOnClickListener { onClick() }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
