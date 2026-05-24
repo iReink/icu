@@ -4524,10 +4524,65 @@ class MainActivity : AppCompatActivity() {
                 keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP
             }
         }
+        lateinit var updateSearchChrome: () -> Unit
+        val leadingIcon = ImageView(this).apply {
+            setImageResource(R.drawable.ic_search)
+            imageTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_text_secondary)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                if (input.hasFocus() || !input.text.isNullOrEmpty()) {
+                    input.text?.clear()
+                    input.clearFocus()
+                    val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                    inputMethodManager.hideSoftInputFromWindow(input.windowToken, 0)
+                    updateSearchChrome()
+                } else {
+                    input.requestFocus()
+                    val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                    inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+                }
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                rightMargin = dp(16)
+            }
+        }
+        val clearButton = MaterialButton(this).apply {
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
+            elevation = 0f
+            stateListAnimator = null
+            insetTop = 0
+            insetBottom = 0
+            minWidth = 0
+            minimumWidth = 0
+            minimumHeight = dp(48)
+            setPadding(0, 0, 0, 0)
+            setIconResource(R.drawable.ic_close)
+            iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_text_secondary)
+            iconPadding = 0
+            contentDescription = getString(R.string.clear_search)
+            visibility = if (initialValue.isBlank()) View.GONE else View.VISIBLE
+            setOnClickListener {
+                input.text?.clear()
+                input.requestFocus()
+                updateSearchChrome()
+                val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply {
+                leftMargin = dp(4)
+            }
+        }
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), 0, if (includeCalendar) dp(4) else dp(16), 0)
+            setPadding(
+                if (style == SearchFieldStyle.DIVIDED) dp(20) else dp(16),
+                0,
+                if (includeCalendar) dp(4) else if (style == SearchFieldStyle.DIVIDED) dp(20) else dp(16),
+                0
+            )
             isClickable = true
             isFocusable = false
             setOnClickListener {
@@ -4535,14 +4590,9 @@ class MainActivity : AppCompatActivity() {
                 val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
                 inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
             }
-            addView(ImageView(this@MainActivity).apply {
-                setImageResource(R.drawable.ic_search)
-                imageTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_text_secondary)
-                layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
-                    rightMargin = dp(16)
-                }
-            })
+            addView(leadingIcon)
             addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(clearButton)
             if (includeCalendar) {
                 addView(MaterialButton(this@MainActivity).apply {
                     backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
@@ -4602,20 +4652,30 @@ class MainActivity : AppCompatActivity() {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply {
-                    leftMargin = dp(20)
                     topMargin = dp(6)
-                    rightMargin = dp(20)
                     bottomMargin = dp(0)
                 }
             }
         }
+        updateSearchChrome = {
+            val isActive = input.hasFocus() || !input.text.isNullOrEmpty()
+            leadingIcon.setImageResource(if (isActive) R.drawable.ic_arrow_back else R.drawable.ic_search)
+            leadingIcon.imageTintList = ContextCompat.getColorStateList(
+                this@MainActivity,
+                if (isActive) R.color.icu_text_primary else R.color.icu_text_secondary
+            )
+            clearButton.visibility = if (input.text.isNullOrEmpty()) View.GONE else View.VISIBLE
+        }
+        input.setOnFocusChangeListener { _, _ -> updateSearchChrome() }
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                updateSearchChrome()
                 onQueryChanged(s?.toString().orEmpty())
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
+        updateSearchChrome()
         return root to input
     }
 

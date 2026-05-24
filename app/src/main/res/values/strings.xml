@@ -67,6 +67,7 @@
     <string name="no_tracks">Пока нет сохранённых треков</string>
     <string name="no_search_results">Ничего не найдено</string>
     <string name="search_tracks">Поиск треков</string>
+    <string name="clear_search">Очистить поиск</string>
     <string name="pick_track_date">Выбрать дату</string>
     <string name="all_time">За всё время</string>
     <string name="this_month">Этот месяц</string>
