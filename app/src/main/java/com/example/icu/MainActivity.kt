@@ -4,6 +4,8 @@ import android.Manifest
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -63,6 +65,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.widget.PopupMenu
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -73,6 +76,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.datepicker.MaterialDatePicker
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -99,6 +103,7 @@ import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
+import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -128,6 +133,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var reticleView: ReticleView
     private lateinit var sectionPanel: LinearLayout
     private lateinit var sectionTitle: TextView
+    private lateinit var sectionHeaderActions: LinearLayout
     private lateinit var sectionContent: LinearLayout
     private lateinit var trackStore: GpxTrackStore
     private lateinit var savedPointStore: SavedPointStore
@@ -183,6 +189,11 @@ class MainActivity : AppCompatActivity() {
     private var selectedTrackListTab = 0
     private var trackSearchQuery = ""
     private var pointSearchQuery = ""
+    private var isPointSelectionMode = false
+    private var isTrackSelectionMode = false
+    private val selectedPointIds = mutableSetOf<String>()
+    private val selectedTrackFileNames = mutableSetOf<String>()
+    private var pendingClipboardPoint: GeoPoint? = null
     private var skippedTrackRefreshes = 0
     private var skippedPointRefreshes = 0
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
@@ -239,6 +250,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    private val pointImportLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            uri?.let { importPointsFromFile(it) }
+        }
+
+    private val trackImportLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            uri?.let { importTracksFromFile(it) }
+        }
+
     private val recordingStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             pendingSavedTrackFileName = intent?.getStringExtra(TrackRecordingService.EXTRA_SAVED_TRACK_FILE_NAME)
@@ -275,6 +296,7 @@ class MainActivity : AppCompatActivity() {
         updateAuthHeader()
         handleAuthCallback(intent)
         handleFriendInvite(intent)
+        handlePointShare(intent)
 
         if (hasLocationPermission()) {
             enableMyLocation(follow = true)
@@ -335,6 +357,7 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         handleAuthCallback(intent)
         handleFriendInvite(intent)
+        handlePointShare(intent)
     }
 
     private fun bindViews() {
@@ -354,6 +377,7 @@ class MainActivity : AppCompatActivity() {
         reticleView = findViewById(R.id.reticleView)
         sectionPanel = findViewById(R.id.sectionPanel)
         sectionTitle = findViewById(R.id.sectionTitle)
+        sectionHeaderActions = findViewById(R.id.sectionHeaderActions)
         sectionContent = findViewById(R.id.sectionContent)
     }
 
@@ -540,6 +564,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleSectionBack() {
+        if (isPointSelectionMode) {
+            isPointSelectionMode = false
+            selectedPointIds.clear()
+            showPointsScreen()
+            return
+        }
+        if (isTrackSelectionMode) {
+            isTrackSelectionMode = false
+            selectedTrackFileNames.clear()
+            showTracksScreen()
+            return
+        }
         if (currentSection == Section.AUTH && currentAuthStep == AuthStep.PASSWORD) {
             showAuthEmailScreen()
             return
@@ -577,6 +613,33 @@ class MainActivity : AppCompatActivity() {
             showAuthEntry()
         } else {
             acceptFriendInvite(token)
+        }
+    }
+
+    private fun handlePointShare(intent: Intent?) {
+        val data = intent?.data ?: return
+        val isAppShare = data.scheme == "icu" && data.host == "point-share"
+        val isHttpsShare = data.scheme == "https" &&
+            data.host == "jjinirtbtgkyesewvyux.supabase.co" &&
+            data.path == "/functions/v1/point-share"
+        if (!isAppShare && !isHttpsShare) return
+        val token = data.getQueryParameter("token") ?: return
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.fetchPointShare(token)
+            }.onSuccess { points ->
+                runOnUiThread {
+                    if (points.isEmpty()) {
+                        showSnackbar(getString(R.string.no_waypoints_in_file), isLong = true)
+                    } else {
+                        showImportPointsDialog(points)
+                    }
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                }
+            }
         }
     }
 
@@ -1969,6 +2032,10 @@ class MainActivity : AppCompatActivity() {
         showMapEntitySheet(
             title = point.name,
             subtitle = getString(R.string.destination_distance, distanceToPoint(point.toGeoPoint())),
+            caption = GpxExchange.formatCoordinates(point.latitude, point.longitude),
+            onCaptionClick = {
+                copyCoordinates(point)
+            },
             holePoint = point.toGeoPoint(),
             holeOffsetYPx = savedPointHighlightOffset(point),
             menuContentDescription = getString(R.string.point_actions),
@@ -1981,6 +2048,8 @@ class MainActivity : AppCompatActivity() {
     private fun showMapEntitySheet(
         title: String,
         subtitle: String,
+        caption: String? = null,
+        onCaptionClick: (() -> Unit)? = null,
         holePoint: GeoPoint?,
         holeOffsetYPx: Int,
         menuContentDescription: String,
@@ -2044,6 +2113,22 @@ class MainActivity : AppCompatActivity() {
                     topMargin = dp(12)
                 }
             })
+            if (!caption.isNullOrBlank()) {
+                addView(TextView(this@MainActivity).apply {
+                    text = caption
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                    textSize = 14f
+                    isClickable = onCaptionClick != null
+                    isFocusable = onCaptionClick != null
+                    setOnClickListener { onCaptionClick?.invoke() }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        topMargin = dp(8)
+                    }
+                })
+            }
         }
         sheet.setContentView(content)
         sheet.setOnShowListener { dialog ->
@@ -2433,8 +2518,20 @@ class MainActivity : AppCompatActivity() {
     private fun showTracksScreen() {
         currentSection = Section.TRACKS
         val tracks = allSavedTracks
-        showSection(getString(R.string.my_tracks))
+        showSection(if (isTrackSelectionMode) getString(R.string.share) else getString(R.string.my_tracks))
         setSectionContentPadding(horizontalDp = 0)
+        findViewById<MaterialButton>(R.id.closeSectionButton).visibility =
+            if (isTrackSelectionMode) View.VISIBLE else View.INVISIBLE
+        if (isTrackSelectionMode) {
+            addSectionTextAction(getString(R.string.done)) { shareSelectedTracks() }
+        } else {
+            addSectionIconAction(R.drawable.ic_import, getString(R.string.import_action)) { openTrackFilePicker() }
+            addSectionIconAction(R.drawable.ic_share, getString(R.string.share)) {
+                isTrackSelectionMode = true
+                selectedTrackFileNames.clear()
+                showTracksScreen()
+            }
+        }
 
         if (!hasLoadedSavedTracks && tracks.isEmpty()) {
             sectionContent.addView(emptyStateText(getString(R.string.loading)))
@@ -2475,17 +2572,46 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
+        val selectionRowHost = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
         sectionContent.addView(tabs)
         sectionContent.addView(searchInput.first)
+        sectionContent.addView(selectionRowHost)
         sectionContent.addView(listHost)
         pages.forEach { page -> tabs.addTab(tabs.newTab().setText(page.title)) }
         renderTrackTab = { position ->
             selectedTrackListTab = position
             listHost.removeAllViews()
+            val pageTracks = tracks
+                .filter { it.type == pages[position].type }
+                .filter { trackMatchesQuery(it, trackSearchQuery) }
+            if (isTrackSelectionMode && selectedTrackFileNames.isEmpty()) {
+                selectedTrackFileNames.addAll(pageTracks.map { it.file.name })
+            }
+            selectionRowHost.removeAllViews()
+            if (isTrackSelectionMode) {
+                selectionRowHost.addView(selectionMasterRow(
+                    allSelected = pageTracks.isNotEmpty() && pageTracks.all { selectedTrackFileNames.contains(it.file.name) },
+                    selectedCount = pageTracks.count { selectedTrackFileNames.contains(it.file.name) },
+                    totalCount = pageTracks.size,
+                    onCheckedChanged = { checked ->
+                        if (checked) selectedTrackFileNames.addAll(pageTracks.map { it.file.name })
+                        else selectedTrackFileNames.removeAll(pageTracks.map { it.file.name }.toSet())
+                        renderTrackTab(selectedTrackListTab)
+                    }
+                ))
+            }
             listHost.addView(tracksPageView(pages[position].type, tracks, trackSearchQuery))
         }
         tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
+                if (isTrackSelectionMode && tab.position != selectedTrackListTab) {
+                    selectedTrackFileNames.clear()
+                }
                 renderTrackTab(tab.position)
             }
 
@@ -2599,8 +2725,20 @@ class MainActivity : AppCompatActivity() {
     private fun showPointsScreen() {
         currentSection = Section.POINTS
         val points = savedPointStore.loadPoints()
-        showSection(getString(R.string.points))
+        showSection(if (isPointSelectionMode) getString(R.string.share) else getString(R.string.points))
         setSectionContentPadding(horizontalDp = 0)
+        findViewById<MaterialButton>(R.id.closeSectionButton).visibility =
+            if (isPointSelectionMode) View.VISIBLE else View.INVISIBLE
+        if (isPointSelectionMode) {
+            addSectionTextAction(getString(R.string.done)) { shareSelectedPoints() }
+        } else {
+            addSectionIconAction(R.drawable.ic_import, getString(R.string.import_action)) { startPointImport() }
+            addSectionIconAction(R.drawable.ic_share, getString(R.string.share)) {
+                isPointSelectionMode = true
+                selectedPointIds.clear()
+                showPointsScreen()
+            }
+        }
 
         lateinit var renderPoints: () -> Unit
         val searchInput = searchField(
@@ -2617,11 +2755,19 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
+        val selectionRowHost = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
         sectionContent.addView(searchInput.first)
+        sectionContent.addView(selectionRowHost)
         sectionContent.addView(listHost)
 
         renderPoints = render@{
             listHost.removeAllViews()
+            selectionRowHost.removeAllViews()
             if (points.isEmpty()) {
                 listHost.addView(emptyStateText(getString(R.string.no_saved_points)))
                 return@render
@@ -2634,6 +2780,21 @@ class MainActivity : AppCompatActivity() {
             if (filteredPoints.isEmpty()) {
                 listHost.addView(emptyStateText(getString(R.string.no_search_results)))
                 return@render
+            }
+            if (isPointSelectionMode && selectedPointIds.isEmpty()) {
+                selectedPointIds.addAll(filteredPoints.map { it.id })
+            }
+            if (isPointSelectionMode) {
+                selectionRowHost.addView(selectionMasterRow(
+                    allSelected = filteredPoints.all { selectedPointIds.contains(it.id) },
+                    selectedCount = filteredPoints.count { selectedPointIds.contains(it.id) },
+                    totalCount = filteredPoints.size,
+                    onCheckedChanged = { checked ->
+                        if (checked) selectedPointIds.addAll(filteredPoints.map { it.id })
+                        else selectedPointIds.removeAll(filteredPoints.map { it.id }.toSet())
+                        renderPoints()
+                    }
+                ))
             }
 
             val recyclerView = RecyclerView(this).apply {
@@ -2648,7 +2809,7 @@ class MainActivity : AppCompatActivity() {
             }
             val adapter = SavedPointAdapter(filteredPoints.toMutableList())
             recyclerView.adapter = adapter
-            if (pointSearchQuery.isBlank()) {
+            if (pointSearchQuery.isBlank() && !isPointSelectionMode) {
                 val callback = SavedPointDragCallback(adapter)
                 val touchHelper = ItemTouchHelper(callback)
                 touchHelper.attachToRecyclerView(recyclerView)
@@ -2670,7 +2831,13 @@ class MainActivity : AppCompatActivity() {
             setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.icu_card_surface))
             isClickable = true
             isFocusable = true
-            setOnClickListener { showSavedPointOnMap(point) }
+            setOnClickListener {
+                if (isPointSelectionMode) {
+                    togglePointSelection(point)
+                } else {
+                    showSavedPointOnMap(point)
+                }
+            }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -2680,6 +2847,19 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(16), dp(12), dp(8), dp(12))
+
+                if (isPointSelectionMode) {
+                    addView(MaterialCheckBox(this@MainActivity).apply {
+                        isChecked = selectedPointIds.contains(point.id)
+                        setOnCheckedChangeListener { _, checked ->
+                            if (checked) selectedPointIds.add(point.id) else selectedPointIds.remove(point.id)
+                            showPointsScreen()
+                        }
+                        layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+                            rightMargin = dp(4)
+                        }
+                    })
+                }
 
                 addView(LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.VERTICAL
@@ -2713,7 +2893,7 @@ class MainActivity : AppCompatActivity() {
                     })
                 }
 
-                addView(MaterialButton(this@MainActivity).apply {
+                if (!isPointSelectionMode) addView(MaterialButton(this@MainActivity).apply {
                     backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
                     background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
                     elevation = 0f
@@ -2753,7 +2933,8 @@ class MainActivity : AppCompatActivity() {
                 1,
                 if (point.visible) R.string.hide_from_map else R.string.show_on_map
             )
-            menu.add(0, POINT_ACTION_DELETE, 2, destructiveMenuText(R.string.delete))
+            menu.add(0, POINT_ACTION_SHARE, 2, R.string.share)
+            menu.add(0, POINT_ACTION_DELETE, 3, destructiveMenuText(R.string.delete))
             setOnMenuItemClickListener { item ->
                 onActionSelected?.invoke()
                 when (item.itemId) {
@@ -2765,6 +2946,7 @@ class MainActivity : AppCompatActivity() {
                         loadSavedPointsOnMap()
                         if (refreshScreen) showPointsScreen()
                     }
+                    POINT_ACTION_SHARE -> sharePoint(point)
                     POINT_ACTION_DELETE -> showDeletePointDialog(point, refreshScreen)
                 }
                 true
@@ -2811,6 +2993,246 @@ class MainActivity : AppCompatActivity() {
                 if (refreshScreen) showPointsScreen()
             }
             .show()
+    }
+
+    private fun copyCoordinates(point: SavedPoint) {
+        val coordinates = GpxExchange.formatCoordinates(point.latitude, point.longitude)
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.points), coordinates))
+        showSnackbar(getString(R.string.coordinates_copied))
+    }
+
+    private fun sharePoint(point: SavedPoint) {
+        sharePoints(listOf(point))
+    }
+
+    private fun shareSelectedPoints() {
+        val visiblePoints = savedPointStore.loadPoints().filter { point ->
+            pointSearchQuery.isBlank() ||
+                point.name.lowercase(Locale.forLanguageTag("ru-RU"))
+                    .contains(pointSearchQuery.trim().lowercase(Locale.forLanguageTag("ru-RU")))
+        }
+        val selected = visiblePoints.filter { selectedPointIds.contains(it.id) }
+        if (selected.isEmpty()) return
+        isPointSelectionMode = false
+        selectedPointIds.clear()
+        showPointsScreen()
+        sharePoints(selected)
+    }
+
+    private fun sharePoints(points: List<SavedPoint>) {
+        backgroundExecutor.execute {
+            val gpxFile = runCatching {
+                val waypoints = points.map { point ->
+                    ImportedWaypoint(point.name, point.latitude, point.longitude, point.createdAtMillis)
+                }
+                val fileName = if (points.size == 1) {
+                    GpxExchange.safeFileName(points.first().name, "gpx")
+                } else {
+                    GpxExchange.safeFileName("ICU points ${System.currentTimeMillis()}", "gpx")
+                }
+                File(GpxExchange.exportDirectory(this), fileName).also { file ->
+                    GpxExchange.writeWaypointsToFile(file, waypoints)
+                }
+            }
+            if (gpxFile.isFailure) {
+                runOnUiThread {
+                    showSnackbar(getString(R.string.export_failed, userMessage(gpxFile.exceptionOrNull() ?: RuntimeException())), isLong = true)
+                }
+                return@execute
+            }
+
+            val link = runCatching {
+                val session = sessionStore.current() ?: return@runCatching null
+                val token = supabaseClient.createPointShare(
+                    session,
+                    points.map { ImportedWaypoint(it.name, it.latitude, it.longitude, null) }
+                )
+                "${SupabaseConfig.POINT_SHARE_URL}?token=$token"
+            }.getOrNull()
+
+            val text = if (points.size == 1) {
+                val point = points.first()
+                val coordinates = GpxExchange.formatCoordinates(point.latitude, point.longitude)
+                if (link != null) getString(R.string.share_point_text, point.name, coordinates, link)
+                else "${point.name}\n$coordinates"
+            } else {
+                buildString {
+                    append(getString(R.string.share_points_title))
+                    append("\n")
+                    append(points.joinToString("\n") { "${it.name}: ${GpxExchange.formatCoordinates(it.latitude, it.longitude)}" })
+                    if (link != null) append("\n$link")
+                }
+            }
+            if (link == null && sessionStore.current() != null) {
+                runOnUiThread {
+                    showSnackbar(getString(R.string.point_share_link_failed), isLong = true)
+                }
+            }
+            runOnUiThread {
+                shareFile(
+                    file = gpxFile.getOrThrow(),
+                    mimeType = "application/gpx+xml",
+                    text = text,
+                    chooserTitle = getString(R.string.share_points_title)
+                )
+            }
+        }
+    }
+
+    private fun startPointImport() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+        val point = CoordinateParser.parseFirst(text)
+        if (point == null) {
+            openPointFilePicker()
+            return
+        }
+        pendingClipboardPoint = point
+        showClipboardImportDialog(point)
+    }
+
+    private fun showClipboardImportDialog(point: GeoPoint) {
+        val input = EditText(this).apply {
+            setText(SavedPointStore.defaultPointName(System.currentTimeMillis()))
+            selectAll()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = GpxExchange.formatCoordinates(point.latitude, point.longitude)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 14f
+            })
+            addView(input, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(12) })
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.import_from_clipboard)
+            .setView(container)
+            .setNeutralButton(R.string.import_from_file) { _, _ -> openPointFilePicker() }
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.import_action_full) { _, _ ->
+                importWaypoints(listOf(ImportedWaypoint(
+                    name = input.text.toString().trim().ifBlank { SavedPointStore.defaultPointName(System.currentTimeMillis()) },
+                    latitude = point.latitude,
+                    longitude = point.longitude,
+                    timeMillis = null
+                )))
+            }
+            .show()
+        input.post {
+            input.requestFocus()
+            input.selectAll()
+            val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
+
+    private fun openPointFilePicker() {
+        pointImportLauncher.launch(arrayOf("application/gpx+xml", "text/xml", "application/xml", "application/octet-stream", "*/*"))
+    }
+
+    private fun importPointsFromFile(uri: Uri) {
+        backgroundExecutor.execute {
+            runCatching {
+                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
+                val waypoints = GpxExchange.parseWaypoints(bytes)
+                if (waypoints.isEmpty()) throw IllegalArgumentException(getString(R.string.no_waypoints_in_file))
+                waypoints
+            }.onSuccess { waypoints ->
+                runOnUiThread { showImportPointsDialog(waypoints) }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun showImportPointsDialog(points: List<ImportedWaypoint>) {
+        val selected = BooleanArray(points.size) { true }
+        lateinit var importButtonUpdater: () -> Unit
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val selectToggle = MaterialButton(this).apply {
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+            isAllCaps = false
+            text = getString(R.string.select_none)
+        }
+        fun renderRows() {
+            listContainer.removeAllViews()
+            points.forEachIndexed { index, point ->
+                listContainer.addView(MaterialCheckBox(this).apply {
+                    text = point.name.ifBlank { SavedPointStore.defaultPointName(System.currentTimeMillis()) }
+                    isChecked = selected[index]
+                    setOnCheckedChangeListener { _, checked ->
+                        selected[index] = checked
+                        selectToggle.text = if (selected.all { it }) getString(R.string.select_none) else getString(R.string.select_all)
+                        importButtonUpdater()
+                    }
+                })
+            }
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.import_points_caption)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 14f
+            })
+            addView(selectToggle)
+            addView(ScrollView(this@MainActivity).apply {
+                addView(listContainer)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(280)
+            ))
+        }
+        renderRows()
+        selectToggle.setOnClickListener {
+            val newValue = !selected.all { it }
+            selected.indices.forEach { selected[it] = newValue }
+            selectToggle.text = if (newValue) getString(R.string.select_none) else getString(R.string.select_all)
+            renderRows()
+            importButtonUpdater()
+        }
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.import_points_title)
+            .setView(content)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.import_action_full, null)
+            .create()
+        dialog.setOnShowListener {
+            val positive = dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+            importButtonUpdater = {
+                positive.isEnabled = selected.any { it }
+            }
+            positive.setOnClickListener {
+                val selectedPoints = points.filterIndexed { index, _ -> selected[index] }
+                importWaypoints(selectedPoints)
+                dialog.dismiss()
+            }
+            importButtonUpdater()
+        }
+        dialog.show()
+    }
+
+    private fun importWaypoints(points: List<ImportedWaypoint>) {
+        if (points.isEmpty()) return
+        val imported = savedPointStore.saveImportedPoints(points)
+        skippedPointRefreshes = 1
+        syncTracksSilently()
+        loadSavedPointsOnMap()
+        if (currentSection == Section.POINTS) showPointsScreen()
+        showSnackbar(getString(R.string.imported_points, imported.size), isLong = true)
     }
 
     private fun showToolsScreen() {
@@ -3720,6 +4142,7 @@ class MainActivity : AppCompatActivity() {
         setLightSystemBars(lightStatusBar = true)
         sectionTitle.text = title
         sectionContent.removeAllViews()
+        sectionHeaderActions.removeAllViews()
         authRootView = null
         findViewById<MaterialButton>(R.id.closeSectionButton).visibility =
             if (currentSection == Section.AUTH || currentSection == Section.STATISTICS) View.VISIBLE else View.INVISIBLE
@@ -3727,6 +4150,44 @@ class MainActivity : AppCompatActivity() {
         addTrackFab.visibility = View.GONE
         myLocationButton.visibility = View.GONE
         recordingPanel.visibility = View.GONE
+    }
+
+    private fun addSectionIconAction(iconResId: Int, contentDescription: String, onClick: () -> Unit) {
+        sectionHeaderActions.addView(MaterialButton(this).apply {
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
+            elevation = 0f
+            stateListAnimator = null
+            minWidth = 0
+            minimumWidth = 0
+            minimumHeight = dp(48)
+            setPadding(0, 0, 0, 0)
+            setIconResource(iconResId)
+            iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+            iconPadding = 0
+            this.contentDescription = contentDescription
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+        })
+    }
+
+    private fun addSectionTextAction(text: String, onClick: () -> Unit) {
+        sectionHeaderActions.addView(MaterialButton(this).apply {
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
+            elevation = 0f
+            stateListAnimator = null
+            minWidth = 0
+            minimumWidth = 0
+            minimumHeight = dp(48)
+            setPadding(dp(8), 0, dp(8), 0)
+            this.text = text
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+            isAllCaps = false
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48))
+        })
     }
 
     private fun hideSection() {
@@ -3911,13 +4372,55 @@ class MainActivity : AppCompatActivity() {
         return root to input
     }
 
+    private fun selectionMasterRow(
+        allSelected: Boolean,
+        selectedCount: Int,
+        totalCount: Int,
+        onCheckedChanged: (Boolean) -> Unit
+    ): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), 0, dp(20), dp(8))
+            addView(MaterialCheckBox(this@MainActivity).apply {
+                isChecked = allSelected
+                setOnCheckedChangeListener { _, checked -> onCheckedChanged(checked) }
+                text = getString(R.string.all_on_screen)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.selected_count, selectedCount, totalCount)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 13f
+            })
+        }
+    }
+
+    private fun togglePointSelection(point: SavedPoint) {
+        if (!selectedPointIds.add(point.id)) selectedPointIds.remove(point.id)
+        showPointsScreen()
+    }
+
+    private fun toggleTrackSelection(track: RecordedTrack) {
+        if (!selectedTrackFileNames.add(track.file.name)) selectedTrackFileNames.remove(track.file.name)
+        showTracksScreen()
+    }
+
     private fun trackCard(track: RecordedTrack): View {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundResource(R.drawable.bg_track_cell)
             isClickable = true
             isFocusable = true
-            setOnClickListener { showTrackOnMap(track) }
+            setOnClickListener {
+                if (isTrackSelectionMode) {
+                    toggleTrackSelection(track)
+                } else {
+                    showTrackOnMap(track)
+                }
+            }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -3940,6 +4443,19 @@ class MainActivity : AppCompatActivity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+        }
+
+        if (isTrackSelectionMode) {
+            header.addView(MaterialCheckBox(this).apply {
+                isChecked = selectedTrackFileNames.contains(track.file.name)
+                setOnCheckedChangeListener { _, checked ->
+                    if (checked) selectedTrackFileNames.add(track.file.name) else selectedTrackFileNames.remove(track.file.name)
+                    showTracksScreen()
+                }
+                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+                    rightMargin = dp(4)
+                }
+            })
         }
 
         val titleColumn = LinearLayout(this).apply {
@@ -3984,7 +4500,7 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
-        header.addView(MaterialButton(this).apply {
+        if (!isTrackSelectionMode) header.addView(MaterialButton(this).apply {
             backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
             background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
             elevation = 0f
@@ -4045,7 +4561,8 @@ class MainActivity : AppCompatActivity() {
                 1,
                 if (track.visible) R.string.hide_from_map else R.string.show_on_map
             )
-            menu.add(0, TRACK_ACTION_DELETE, 2, destructiveMenuText(R.string.delete))
+            menu.add(0, TRACK_ACTION_SHARE, 2, R.string.share)
+            menu.add(0, TRACK_ACTION_DELETE, 3, destructiveMenuText(R.string.delete))
             setOnMenuItemClickListener { item ->
                 onActionSelected?.invoke()
                 when (item.itemId) {
@@ -4059,6 +4576,7 @@ class MainActivity : AppCompatActivity() {
                         syncTracksSilently()
                         if (refreshScreen) showTracksScreen()
                     }
+                    TRACK_ACTION_SHARE -> shareTrack(track)
                     TRACK_ACTION_DELETE -> showDeleteDialog(track, refreshScreen)
                 }
                 true
@@ -4109,6 +4627,128 @@ class MainActivity : AppCompatActivity() {
                 if (refreshScreen) showTracksScreen()
             }
             .show()
+    }
+
+    private fun shareTrack(track: RecordedTrack) {
+        backgroundExecutor.execute {
+            runCatching {
+                val file = File(
+                    GpxExchange.exportDirectory(this),
+                    GpxExchange.safeFileName(track.name, "gpx")
+                )
+                track.file.copyTo(file, overwrite = true)
+                file
+            }.onSuccess { file ->
+                val text = getString(
+                    R.string.share_track_text,
+                    track.name,
+                    formatDistance(track.distanceMeters),
+                    formatDuration(track.durationMillis),
+                    formatTrackDate(track.startedAtMillis)
+                )
+                runOnUiThread {
+                    shareFile(file, "application/gpx+xml", text, getString(R.string.share_tracks_title))
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.export_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun shareSelectedTracks() {
+        val pages = listOf(TrackType.WALK, TrackType.BIKE, TrackType.CUSTOM)
+        val activeType = pages[selectedTrackListTab.coerceIn(0, pages.lastIndex)]
+        val visibleTracks = allSavedTracks
+            .filter { it.type == activeType }
+            .filter { trackMatchesQuery(it, trackSearchQuery) }
+        val selected = visibleTracks.filter { selectedTrackFileNames.contains(it.file.name) }
+        if (selected.isEmpty()) return
+        isTrackSelectionMode = false
+        selectedTrackFileNames.clear()
+        showTracksScreen()
+        if (selected.size == 1) {
+            shareTrack(selected.first())
+            return
+        }
+        backgroundExecutor.execute {
+            runCatching {
+                File(
+                    GpxExchange.exportDirectory(this),
+                    GpxExchange.safeFileName("ICU tracks ${System.currentTimeMillis()}", "zip")
+                ).also { file ->
+                    GpxExchange.zipTrackFiles(file, selected)
+                }
+            }.onSuccess { file ->
+                val text = selected.joinToString("\n") { track ->
+                    "${track.name}: ${formatDistance(track.distanceMeters)} · ${formatTrackDate(track.startedAtMillis)}"
+                }
+                runOnUiThread {
+                    shareFile(file, "application/zip", text, getString(R.string.share_tracks_title))
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.export_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun openTrackFilePicker() {
+        trackImportLauncher.launch(arrayOf(
+            "application/gpx+xml",
+            "application/zip",
+            "application/x-zip-compressed",
+            "text/xml",
+            "application/xml",
+            "application/octet-stream",
+            "*/*"
+        ))
+    }
+
+    private fun importTracksFromFile(uri: Uri) {
+        backgroundExecutor.execute {
+            runCatching {
+                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
+                val fileName = uri.lastPathSegment.orEmpty().lowercase(Locale.US)
+                val importedTracks = if (fileName.endsWith(".zip") || bytes.take(2).toByteArray().contentEquals(byteArrayOf(0x50.toByte(), 0x4B.toByte()))) {
+                    GpxExchange.unzipGpxFiles(bytes).flatMap { (_, gpxBytes) -> GpxExchange.parseTracks(gpxBytes) }
+                } else {
+                    GpxExchange.parseTracks(bytes)
+                }
+                if (importedTracks.isEmpty()) throw IllegalArgumentException(getString(R.string.no_tracks_in_file))
+                importedTracks.map { trackStore.saveImportedTrack(it) }
+            }.onSuccess { imported ->
+                allSavedTracks = (allSavedTracks + imported)
+                    .distinctBy { it.file.name }
+                    .sortedByDescending { it.startedAtMillis }
+                hasLoadedSavedTracks = true
+                runOnUiThread {
+                    applySavedTrackOverlays(savedTracksForMap())
+                    skippedTrackRefreshes = 2
+                    syncTracksSilently()
+                    if (currentSection == Section.TRACKS) showTracksScreen()
+                    showSnackbar(getString(R.string.imported_tracks, imported.size), isLong = true)
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun shareFile(file: File, mimeType: String, text: String, chooserTitle: String) {
+        val uri = FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = mimeType
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_TEXT, text)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newUri(contentResolver, file.name, uri)
+        }
+        startActivity(Intent.createChooser(intent, chooserTitle))
     }
 
     private fun replaceCachedTrack(track: RecordedTrack) {
@@ -5432,12 +6072,14 @@ class MainActivity : AppCompatActivity() {
         private const val POINT_ACTION_RENAME = 4
         private const val POINT_ACTION_VISIBILITY = 5
         private const val POINT_ACTION_DELETE = 6
+        private const val TRACK_ACTION_SHARE = 7
         private const val FRIEND_ACTION_RENAME = 8
         private const val FRIEND_ACTION_RESET_NAME = 9
         private const val FRIEND_ACTION_SHARE = 10
         private const val FRIEND_ACTION_DELETE = 11
         private const val PROFILE_ACTION_EDIT = 12
         private const val PROFILE_ACTION_SIGN_OUT = 13
+        private const val POINT_ACTION_SHARE = 14
         private const val TRACK_STROKE_WIDTH = 8f
         private const val TRACK_FOCUS_STROKE_WIDTH = 12f
         private const val TRACK_FOCUS_HALO_WIDTH = 26f

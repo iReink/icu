@@ -58,6 +58,28 @@ class SavedPointStore(context: Context) {
         return savedPoint
     }
 
+    fun saveImportedPoints(points: List<ImportedWaypoint>): List<SavedPoint> {
+        if (points.isEmpty()) return emptyList()
+        val now = System.currentTimeMillis()
+        val current = loadPoints()
+        val startOrder = (current.minOfOrNull { it.sortOrder } ?: 0L) - 1L
+        val imported = points.mapIndexed { index, point ->
+            val createdAt = point.timeMillis ?: now
+            SavedPoint(
+                id = UUID.randomUUID().toString(),
+                name = point.name.ifBlank { defaultPointName(createdAt) },
+                latitude = point.latitude,
+                longitude = point.longitude,
+                createdAtMillis = createdAt,
+                updatedAtMillis = now,
+                sortOrder = startOrder - index,
+                visible = true
+            )
+        }
+        save(current + imported)
+        return imported
+    }
+
     fun renamePoint(point: SavedPoint, name: String): SavedPoint {
         val updated = point.copy(
             name = name.ifBlank { point.name },

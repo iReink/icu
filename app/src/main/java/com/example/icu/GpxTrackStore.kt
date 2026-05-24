@@ -69,6 +69,28 @@ class GpxTrackStore(private val context: Context) {
         return parseGpxTrack(file)
     }
 
+    fun saveImportedTrack(imported: ImportedTrack): RecordedTrack {
+        val type = imported.type ?: TrackType.CUSTOM
+        val startedAtMillis = imported.points.firstOrNull()?.timeMillis ?: System.currentTimeMillis()
+        val uniqueSuffix = FILE_NAME_FORMATTER.format(Instant.ofEpochMilli(System.currentTimeMillis()))
+        val file = File(
+            tracksDirectory(),
+            "track-import-${type.gpxType}-$uniqueSuffix-${System.nanoTime()}.gpx"
+        )
+        val track = RecordedTrack(
+            name = imported.name?.takeIf { it.isNotBlank() } ?: defaultTrackName(type, startedAtMillis),
+            type = type,
+            points = imported.points,
+            distanceMeters = imported.distanceMeters ?: calculateDistance(imported.points),
+            durationMillis = calculateDuration(imported.points),
+            startedAtMillis = startedAtMillis,
+            visible = imported.visible,
+            file = file
+        )
+        writeTrack(track)
+        return track
+    }
+
     private fun writeTrack(track: RecordedTrack) {
         track.file.outputStream().use { stream ->
             val serializer = Xml.newSerializer()

@@ -234,6 +234,55 @@ class SupabaseApiClient(
         return response.text.trim().trim('"')
     }
 
+    fun createPointShare(session: SupabaseSession, points: List<ImportedWaypoint>): String {
+        val payload = JSONArray()
+        points.forEach { point ->
+            payload.put(JSONObject()
+                .put("name", point.name)
+                .put("latitude", point.latitude)
+                .put("longitude", point.longitude)
+            )
+        }
+        val body = JSONObject()
+            .put("created_by", session.userId)
+            .put("payload", payload)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        val response = request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/point_share_packages",
+            headers = authHeaders(session) + mapOf(
+                "Content-Type" to "application/json",
+                "Prefer" to "return=representation"
+            ),
+            body = body
+        )
+        val array = JSONArray(response.text)
+        return array.getJSONObject(0).getString("token")
+    }
+
+    fun fetchPointShare(token: String): List<ImportedWaypoint> {
+        val response = request(
+            method = "GET",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/point_share_packages?select=payload&token=eq.${token.urlEncoded()}&limit=1",
+            headers = jsonHeaders()
+        )
+        val array = JSONArray(response.text)
+        if (array.length() == 0) return emptyList()
+        val payload = array.getJSONObject(0).getJSONArray("payload")
+        return (0 until payload.length()).mapNotNull { index ->
+            val item = payload.optJSONObject(index) ?: return@mapNotNull null
+            val latitude = item.optDoubleOrNull("latitude") ?: return@mapNotNull null
+            val longitude = item.optDoubleOrNull("longitude") ?: return@mapNotNull null
+            ImportedWaypoint(
+                name = item.optString("name", ""),
+                latitude = latitude,
+                longitude = longitude,
+                timeMillis = null
+            )
+        }
+    }
+
     fun fetchFriends(session: SupabaseSession): List<FriendProfile> {
         val response = request(
             method = "POST",
