@@ -434,7 +434,7 @@ class MainActivity : AppCompatActivity() {
                 view.paddingLeft,
                 view.paddingTop,
                 view.paddingRight,
-                dp(8) + navInsets.bottom
+                dp(4) + navInsets.bottom
             )
             insets
         }
@@ -655,7 +655,9 @@ class MainActivity : AppCompatActivity() {
     private fun importGpxFromExternalOpen(uri: Uri) {
         backgroundExecutor.execute {
             runCatching {
-                contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
+                (contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)).also { bytes ->
+                    if (bytes.isEmpty()) throw IllegalArgumentException(getString(R.string.import_empty_file))
+                }
             }.onSuccess { bytes ->
                 val tracks = runCatching { GpxExchange.parseTracks(bytes) }.getOrDefault(emptyList())
                 if (tracks.isNotEmpty()) {
@@ -667,12 +669,12 @@ class MainActivity : AppCompatActivity() {
                     if (waypoints.isNotEmpty()) {
                         showImportPointsDialog(waypoints)
                     } else {
-                        showSnackbar(getString(R.string.import_failed, getString(R.string.no_tracks_in_file)), isLong = true)
+                        showSnackbar(getString(R.string.no_tracks_in_file), isLong = true)
                     }
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                    showSnackbar(importErrorMessage(error, R.string.import_bad_file), isLong = true)
                 }
             }
         }
@@ -699,7 +701,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                    showSnackbar(importErrorMessage(error, R.string.import_bad_file), isLong = true)
                 }
             }
         }
@@ -726,7 +728,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                    showSnackbar(importErrorMessage(error, R.string.import_bad_file), isLong = true)
                 }
             }
         }
@@ -1268,6 +1270,18 @@ class MainActivity : AppCompatActivity() {
             error is SupabaseException && error.isRateLimited() -> getString(R.string.rate_limit_message)
             error is SupabaseException -> error.readableMessage()
             else -> error.message ?: getString(R.string.unknown_error)
+        }
+    }
+
+    private fun importErrorMessage(error: Throwable, fallbackResId: Int): String {
+        val message = error.message.orEmpty()
+        return when {
+            message.isBlank() -> getString(fallbackResId)
+            message.contains("zip", ignoreCase = true) -> getString(R.string.import_bad_zip)
+            message.contains("end tag", ignoreCase = true) ||
+                message.contains("unexpected", ignoreCase = true) ||
+                message.contains("xml", ignoreCase = true) -> getString(fallbackResId)
+            else -> message
         }
     }
 
@@ -2672,7 +2686,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (tracks.isEmpty()) {
-            sectionContent.addView(emptyStateText(getString(R.string.no_tracks)))
+            sectionContent.addView(emptyStateView(
+                title = getString(R.string.empty_tracks_title),
+                body = getString(R.string.empty_tracks_body),
+                actionText = getString(R.string.empty_tracks_action)
+            ) {
+                hideSection()
+                bottomNavigation.selectedItemId = R.id.navMap
+                showAddTrackSheet()
+            })
             return
         }
 
@@ -2767,8 +2789,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (pageTracks.isEmpty()) {
-            val emptyText = if (query.isBlank()) R.string.no_tracks else R.string.no_search_results
-            content.addView(emptyStateText(getString(emptyText)))
+            if (query.isBlank()) {
+                content.addView(emptyStateView(
+                    title = getString(R.string.empty_track_tab_title),
+                    body = getString(R.string.empty_track_tab_body)
+                ))
+            } else {
+                content.addView(emptyStateView(
+                    title = getString(R.string.empty_search_title),
+                    body = getString(R.string.empty_search_body)
+                ))
+            }
             return content
         }
 
@@ -2828,6 +2859,19 @@ class MainActivity : AppCompatActivity() {
         val tracks = trackStore.loadTracks().filter { it.type != TrackType.CUSTOM }
         showSection(getString(R.string.statistics))
         setSectionContentPadding(horizontalDp = 0)
+        if (tracks.isEmpty()) {
+            setSectionContentPadding(horizontalDp = 20)
+            sectionContent.addView(emptyStateView(
+                title = getString(R.string.empty_stats_title),
+                body = getString(R.string.empty_stats_body),
+                actionText = getString(R.string.empty_tracks_action)
+            ) {
+                hideSection()
+                bottomNavigation.selectedItemId = R.id.navMap
+                showAddTrackSheet()
+            })
+            return
+        }
 
         val pages = listOf(
             StatsPage(getString(R.string.all), null, ContextCompat.getColor(this, R.color.icu_purple_ink)),
@@ -2906,7 +2950,14 @@ class MainActivity : AppCompatActivity() {
             listHost.removeAllViews()
             selectionRowHost.removeAllViews()
             if (points.isEmpty()) {
-                listHost.addView(emptyStateText(getString(R.string.no_saved_points)))
+                listHost.addView(emptyStateView(
+                    title = getString(R.string.empty_points_title),
+                    body = getString(R.string.empty_points_body),
+                    actionText = getString(R.string.empty_points_action)
+                ) {
+                    hideSection()
+                    bottomNavigation.selectedItemId = R.id.navMap
+                })
                 return@render
             }
             val filteredPoints = points.filter { point ->
@@ -2915,7 +2966,10 @@ class MainActivity : AppCompatActivity() {
                         .contains(pointSearchQuery.trim().lowercase(Locale.forLanguageTag("ru-RU")))
             }
             if (filteredPoints.isEmpty()) {
-                listHost.addView(emptyStateText(getString(R.string.no_search_results)))
+                listHost.addView(emptyStateView(
+                    title = getString(R.string.empty_search_title),
+                    body = getString(R.string.empty_search_body)
+                ))
                 return@render
             }
             if (isPointSelectionMode && !hasInitializedPointSelection) {
@@ -3282,6 +3336,7 @@ class MainActivity : AppCompatActivity() {
         backgroundExecutor.execute {
             runCatching {
                 val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
+                if (bytes.isEmpty()) throw IllegalArgumentException(getString(R.string.import_empty_file))
                 val waypoints = GpxExchange.parseWaypoints(bytes)
                 if (waypoints.isEmpty()) throw IllegalArgumentException(getString(R.string.no_waypoints_in_file))
                 waypoints
@@ -3289,7 +3344,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { showImportPointsDialog(waypoints) }
             }.onFailure { error ->
                 runOnUiThread {
-                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                    showSnackbar(importErrorMessage(error, R.string.import_bad_file), isLong = true)
                 }
             }
         }
@@ -3710,7 +3765,7 @@ class MainActivity : AppCompatActivity() {
         sectionContent.addView(syncStatusText())
         sectionContent.addView(statisticsEntryCard())
         sectionContent.addView(groupTitleWithAction(getString(R.string.friends), getString(R.string.add_friend_by_link)) {
-            shareFriendInvite()
+            showFriendInvitePrivacyDialog()
         })
         sectionContent.addView(locationBroadcastRow())
         sectionContent.addView(emptyStateText(getString(R.string.loading)))
@@ -3763,11 +3818,17 @@ class MainActivity : AppCompatActivity() {
         sectionContent.addView(syncStatusText())
         sectionContent.addView(statisticsEntryCard())
         sectionContent.addView(groupTitleWithAction(getString(R.string.friends), getString(R.string.add_friend_by_link)) {
-            shareFriendInvite()
+            showFriendInvitePrivacyDialog()
         })
         sectionContent.addView(locationBroadcastRow())
         if (friends.isEmpty()) {
-            sectionContent.addView(emptyStateText(getString(R.string.no_friends)))
+            sectionContent.addView(emptyStateView(
+                title = getString(R.string.empty_friends_title),
+                body = getString(R.string.empty_friends_body),
+                actionText = getString(R.string.add_friend_by_link)
+            ) {
+                showFriendInvitePrivacyDialog()
+            })
         } else {
             friends.forEach { friend ->
                 sectionContent.addView(friendCard(friend, friend.friendshipId == highlightedFriendshipId))
@@ -4117,6 +4178,17 @@ class MainActivity : AppCompatActivity() {
         if (refreshProfile) {
             showProfileScreen()
         }
+    }
+
+    private fun showFriendInvitePrivacyDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.friend_invite_privacy_title)
+            .setMessage(R.string.friend_invite_privacy_message)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.friend_invite_privacy_action) { _, _ ->
+                shareFriendInvite()
+            }
+            .show()
     }
 
     private fun shareFriendInvite() {
@@ -5036,6 +5108,7 @@ class MainActivity : AppCompatActivity() {
         backgroundExecutor.execute {
             runCatching {
                 val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
+                if (bytes.isEmpty()) throw IllegalArgumentException(getString(R.string.import_empty_file))
                 val fileName = uri.lastPathSegment.orEmpty().lowercase(Locale.US)
                 if (fileName.endsWith(".zip") || bytes.take(2).toByteArray().contentEquals(byteArrayOf(0x50.toByte(), 0x4B.toByte()))) {
                     GpxExchange.unzipGpxFiles(bytes).flatMap { (_, gpxBytes) -> GpxExchange.parseTracks(gpxBytes) }
@@ -5045,14 +5118,14 @@ class MainActivity : AppCompatActivity() {
             }.onSuccess { importedTracks ->
                 runOnUiThread {
                     if (importedTracks.isEmpty()) {
-                        showSnackbar(getString(R.string.import_failed, getString(R.string.no_tracks_in_file)), isLong = true)
+                        showSnackbar(getString(R.string.no_tracks_in_file), isLong = true)
                     } else {
                         showImportTracksDialog(importedTracks)
                     }
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                    showSnackbar(importErrorMessage(error, R.string.import_bad_file), isLong = true)
                 }
             }
         }
@@ -5181,7 +5254,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 runOnUiThread {
-                    showSnackbar(getString(R.string.import_failed, userMessage(error)), isLong = true)
+                    showSnackbar(importErrorMessage(error, R.string.import_bad_file), isLong = true)
                 }
             }
         }
@@ -5579,6 +5652,62 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(240)
             )
+        }
+    }
+
+    private fun emptyStateView(
+        title: String,
+        body: String,
+        actionText: String? = null,
+        onAction: (() -> Unit)? = null
+    ): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(28), dp(40), dp(28), dp(40))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(300)
+            )
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                gravity = Gravity.CENTER
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 20f
+                typeface = Typeface.DEFAULT_BOLD
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = body
+                gravity = Gravity.CENTER
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 15f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = dp(10)
+                }
+            })
+            if (actionText != null && onAction != null) {
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = actionText
+                    isAllCaps = false
+                    letterSpacing = 0f
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_surface)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                    setOnClickListener { onAction() }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        dp(44)
+                    ).apply {
+                        topMargin = dp(18)
+                    }
+                })
+            }
         }
     }
 

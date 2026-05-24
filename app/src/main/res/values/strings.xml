@@ -188,4 +188,24 @@
     <string name="point_share_sign_in">Войдите, чтобы создать ссылку ICU для точки</string>
     <string name="point_share_link_failed">Не удалось создать ICU-ссылку, отправляю только GPX</string>
     <string name="track_share_link_failed">Не удалось создать ICU-ссылку, отправляю только ZIP</string>
+    <string name="empty_tracks_title">Пока нет треков</string>
+    <string name="empty_tracks_body">Запишите прогулку или поездку, либо импортируйте GPX/ZIP через кнопку в заголовке.</string>
+    <string name="empty_tracks_action">Записать трек</string>
+    <string name="empty_track_tab_title">В этой вкладке пока пусто</string>
+    <string name="empty_track_tab_body">Треки появятся здесь после записи или импорта маршрута этого типа.</string>
+    <string name="empty_points_title">Пока нет точек</string>
+    <string name="empty_points_body">Откройте карту, наведите прицел на нужное место, сделайте долгий тап и сохраните точку.</string>
+    <string name="empty_points_action">Открыть карту</string>
+    <string name="empty_search_title">Ничего не найдено</string>
+    <string name="empty_search_body">Проверьте запрос или очистите поиск, чтобы снова увидеть весь список.</string>
+    <string name="empty_friends_title">Пока нет друзей</string>
+    <string name="empty_friends_body">Отправьте приглашение человеку, с которым хотите делиться геопозицией.</string>
+    <string name="empty_stats_title">Статистика появится после первых треков</string>
+    <string name="empty_stats_body">Ручные маршруты не учитываются в спортивной статистике. Запишите пеший или велотрек.</string>
+    <string name="friend_invite_privacy_title">Как работает геопозиция</string>
+    <string name="friend_invite_privacy_message">Друг сможет видеть ваше последнее местоположение и путь за последние 24 часа. Вы можете отключить показ себя в любой момент.\n\nГеопозиция передаётся, когда приложение активно, записывается трек или включена трансляция геопозиции.</string>
+    <string name="friend_invite_privacy_action">Поделиться ссылкой</string>
+    <string name="import_bad_file">Файл не похож на поддерживаемый GPX или ZIP</string>
+    <string name="import_bad_zip">Не удалось прочитать ZIP. Проверьте, что внутри есть GPX-файлы.</string>
+    <string name="import_empty_file">Файл пустой или повреждён</string>
 </resources>
