@@ -2692,6 +2692,7 @@ class MainActivity : AppCompatActivity() {
         val searchInput = searchField(
             hint = getString(R.string.search_tracks),
             includeCalendar = true,
+            style = SearchFieldStyle.DIVIDED,
             initialValue = trackSearchQuery,
             onCalendarClick = { input -> showTrackDatePicker(input) }
         ) { value ->
@@ -2879,6 +2880,7 @@ class MainActivity : AppCompatActivity() {
         val searchInput = searchField(
             hint = getString(R.string.search_points),
             includeCalendar = false,
+            style = SearchFieldStyle.CONTAINED,
             initialValue = pointSearchQuery
         ) { value ->
             pointSearchQuery = value
@@ -4497,6 +4499,7 @@ class MainActivity : AppCompatActivity() {
     private fun searchField(
         hint: String,
         includeCalendar: Boolean,
+        style: SearchFieldStyle,
         initialValue: String,
         onCalendarClick: ((TextInputEditText) -> Unit)? = null,
         onQueryChanged: (String) -> Unit
@@ -4504,6 +4507,13 @@ class MainActivity : AppCompatActivity() {
         val input = TextInputEditText(this).apply {
             setText(initialValue)
             setSingleLine(true)
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+            setHintTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+            background = null
+            this.hint = hint
+            includeFontPadding = false
+            setPadding(0, 0, 0, 0)
             inputType = InputType.TYPE_CLASS_TEXT
             imeOptions = EditorInfo.IME_ACTION_SEARCH
             tag = SEARCH_INPUT_TAG
@@ -4514,27 +4524,26 @@ class MainActivity : AppCompatActivity() {
                 keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP
             }
         }
-        val layout = TextInputLayout(this).apply {
-            this.hint = hint
-            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
-            setStartIconDrawable(R.drawable.ic_search)
-            endIconMode = TextInputLayout.END_ICON_CLEAR_TEXT
-            addView(input)
-        }
-        val root: View = if (includeCalendar) {
-            LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    leftMargin = dp(20)
-                    topMargin = dp(12)
-                    rightMargin = dp(20)
-                    bottomMargin = dp(8)
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), 0, if (includeCalendar) dp(4) else dp(16), 0)
+            isClickable = true
+            isFocusable = false
+            setOnClickListener {
+                input.requestFocus()
+                val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            }
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ic_search)
+                imageTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_text_secondary)
+                layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                    rightMargin = dp(16)
                 }
-                addView(layout, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            })
+            addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            if (includeCalendar) {
                 addView(MaterialButton(this@MainActivity).apply {
                     backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
                     background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_transparent)
@@ -4544,28 +4553,59 @@ class MainActivity : AppCompatActivity() {
                     insetBottom = 0
                     minWidth = 0
                     minimumWidth = 0
-                    minimumHeight = dp(56)
+                    minimumHeight = dp(48)
                     setPadding(0, 0, 0, 0)
                     setIconResource(R.drawable.ic_calendar)
                     iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
                     iconPadding = 0
                     contentDescription = getString(R.string.pick_track_date)
                     setOnClickListener { onCalendarClick?.invoke(input) }
-                    layoutParams = LinearLayout.LayoutParams(dp(56), dp(56)).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply {
                         leftMargin = dp(8)
                     }
                 })
             }
-        } else {
-            layout.apply {
+        }
+        val root: View = when (style) {
+            SearchFieldStyle.CONTAINED -> MaterialCardView(this).apply {
+                radius = dp(28).toFloat()
+                cardElevation = 0f
+                strokeWidth = 0
+                setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.icu_search_container))
+                addView(row, ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(56)
+                ))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(56)
+                ).apply {
+                    leftMargin = dp(20)
+                    topMargin = dp(14)
+                    rightMargin = dp(20)
+                    bottomMargin = dp(16)
+                }
+            }
+            SearchFieldStyle.DIVIDED -> LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(row, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(56)
+                ))
+                addView(View(this@MainActivity).apply {
+                    setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.icu_sheet_divider))
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(1)
+                ))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply {
                     leftMargin = dp(20)
-                    topMargin = dp(12)
+                    topMargin = dp(6)
                     rightMargin = dp(20)
-                    bottomMargin = dp(8)
+                    bottomMargin = dp(0)
                 }
             }
         }
@@ -6289,6 +6329,11 @@ class MainActivity : AppCompatActivity() {
         SETTINGS,
         PROFILE,
         AUTH
+    }
+
+    private enum class SearchFieldStyle {
+        CONTAINED,
+        DIVIDED
     }
 
     private enum class AuthStep {

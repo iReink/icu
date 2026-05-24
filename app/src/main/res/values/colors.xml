@@ -17,6 +17,7 @@
     <color name="icu_screen_surface">#FFFBFE</color>
     <color name="icu_card_surface">#FFFFFF</color>
     <color name="icu_text_secondary">#746C7D</color>
+    <color name="icu_search_container">#F0EAF4</color>
     <color name="icu_danger">#B3261E</color>
     <color name="icu_launcher_background">#D6ECB2</color>
 </resources>
