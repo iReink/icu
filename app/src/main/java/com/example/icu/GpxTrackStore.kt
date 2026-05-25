@@ -16,7 +16,13 @@ class GpxTrackStore(private val context: Context) {
     fun loadTracks(): List<RecordedTrack> {
         return tracksDirectory()
             .listFiles { file -> file.extension.equals("gpx", ignoreCase = true) }
-            ?.mapNotNull { file -> parseGpxTrack(file) }
+            ?.mapNotNull { file ->
+                if (!file.exists()) {
+                    null
+                } else {
+                    runCatching { parseGpxTrack(file) }.getOrNull()
+                }
+            }
             ?.sortedByDescending { it.startedAtMillis }
             ?: emptyList()
     }
