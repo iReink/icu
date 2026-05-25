@@ -1837,6 +1837,9 @@ class MainActivity : AppCompatActivity() {
         fixedMeasurementDistanceMeters = calculateRouteDistance(measurementPoints)
         measurementPolyline?.let { map.overlays.remove(it) }
         measurementPolyline = null
+        trackToEdit?.let { editedTrack ->
+            applySavedTrackOverlays(savedTracksForMap().filterNot { it.file.name == editedTrack.file.name })
+        }
         bottomNavigation.visibility = View.GONE
         addTrackFab.setImageResource(R.drawable.ic_plus_circle)
         updateMeasurementRoute()
@@ -1866,6 +1869,7 @@ class MainActivity : AppCompatActivity() {
         measurementPolyline = null
         bottomNavigation.visibility = View.VISIBLE
         bottomNavigation.selectedItemId = R.id.navMap
+        applySavedTrackOverlays(savedTracksForMap())
         syncRecordingState()
         map.invalidate()
     }
