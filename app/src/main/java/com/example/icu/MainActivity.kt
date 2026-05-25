@@ -166,6 +166,7 @@ class MainActivity : AppCompatActivity() {
     private val measurementPoints = mutableListOf<TrackPoint>()
     private val measurementGeoPoints = mutableListOf<GeoPoint>()
     private var isMeasurementMode = false
+    private var editingMeasurementTrack: RecordedTrack? = null
     private var fixedMeasurementDistanceMeters = 0f
     private var isReceiverRegistered = false
     private var shouldFollowLocation = true
@@ -311,7 +312,7 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
-                    isMeasurementMode -> exitMeasurementMode()
+                    isMeasurementMode -> requestExitMeasurementMode()
                     sectionPanel.visibility == View.VISIBLE -> handleSectionBack()
                     else -> finish()
                 }
@@ -553,7 +554,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<MaterialButton>(R.id.measurementBackButton).setOnClickListener {
-            exitMeasurementMode()
+            requestExitMeasurementMode()
         }
 
         measurementSaveButton.setOnClickListener {
@@ -1265,6 +1266,15 @@ class MainActivity : AppCompatActivity() {
         view.clearFocus()
     }
 
+    private fun showKeyboardFor(input: EditText, delayMs: Long = 120L) {
+        input.postDelayed({
+            input.requestFocus()
+            input.selectAll()
+            val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }, delayMs)
+    }
+
     private fun userMessage(error: Throwable): String {
         return when {
             error is SupabaseException && error.isRateLimited() -> getString(R.string.rate_limit_message)
@@ -1808,7 +1818,7 @@ class MainActivity : AppCompatActivity() {
         return bitmap
     }
 
-    private fun enterMeasurementMode() {
+    private fun enterMeasurementMode(trackToEdit: RecordedTrack? = null) {
         if (TrackRecordingService.currentState.isRecording) {
             showSnackbar(getString(R.string.recording_already_started))
             return
@@ -1816,9 +1826,15 @@ class MainActivity : AppCompatActivity() {
         clearTrackFocus()
         hideSection()
         isMeasurementMode = true
+        editingMeasurementTrack = trackToEdit
         measurementPoints.clear()
         measurementGeoPoints.clear()
-        fixedMeasurementDistanceMeters = 0f
+        trackToEdit?.points?.let { points ->
+            measurementPoints.addAll(points)
+            measurementGeoPoints.addAll(points.map { it.toGeoPoint() })
+            points.lastOrNull()?.let { map.controller.setCenter(it.toGeoPoint()) }
+        }
+        fixedMeasurementDistanceMeters = calculateRouteDistance(measurementPoints)
         measurementPolyline?.let { map.overlays.remove(it) }
         measurementPolyline = null
         bottomNavigation.visibility = View.GONE
@@ -1827,8 +1843,22 @@ class MainActivity : AppCompatActivity() {
         syncRecordingState()
     }
 
+    private fun requestExitMeasurementMode() {
+        if (measurementPoints.size > 3) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.unsaved_measurement_title)
+                .setMessage(R.string.unsaved_measurement_message)
+                .setNegativeButton(R.string.discard_route) { _, _ -> exitMeasurementMode() }
+                .setPositiveButton(R.string.return_to_route, null)
+                .show()
+        } else {
+            exitMeasurementMode()
+        }
+    }
+
     private fun exitMeasurementMode() {
         isMeasurementMode = false
+        editingMeasurementTrack = null
         measurementPoints.clear()
         measurementGeoPoints.clear()
         fixedMeasurementDistanceMeters = 0f
@@ -2004,55 +2034,63 @@ class MainActivity : AppCompatActivity() {
         if (measurementPoints.isEmpty()) return
         val savePoints = measurementPreviewPoints().ifEmpty { measurementPoints.toList() }
         val input = EditText(this).apply {
-            setText(GpxTrackStore.defaultTrackName(TrackType.CUSTOM, savePoints.first().timeMillis))
+            setText(
+                editingMeasurementTrack?.name
+                    ?: GpxTrackStore.defaultTrackName(TrackType.CUSTOM, savePoints.first().timeMillis)
+            )
             selectAll()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         }
         val container = FrameLayout(this).apply {
             setPadding(dp(20), 0, dp(20), 0)
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(input)
-                addView(TextView(this@MainActivity).apply {
-                    text = getString(R.string.point_emoji_hint)
-                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
-                    textSize = 13f
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { topMargin = dp(8) }
-                })
-            })
+            addView(input)
         }
 
-        MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.measurement_route_name_title)
             .setView(container)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.save) { _, _ ->
                 saveMeasurementRoute(savePoints, input.text.toString().trim())
             }
-            .show()
-        input.post {
-            input.requestFocus()
-            input.selectAll()
-            val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            .create()
+        dialog.setOnShowListener {
+            dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+            showKeyboardFor(input)
         }
+        dialog.show()
     }
 
     private fun saveMeasurementRoute(points: List<TrackPoint>, name: String) {
         if (points.isEmpty()) return
-        val savedTrack = trackStore.saveTrack(
-            type = TrackType.CUSTOM,
-            points = points,
-            distanceMeters = calculateRouteDistance(points),
-            startedAtMillis = points.first().timeMillis,
-            name = name.ifBlank { GpxTrackStore.defaultTrackName(TrackType.CUSTOM, points.first().timeMillis) }
-        )
-        allSavedTracks = (allSavedTracks.filterNot { it.file.name == savedTrack.file.name } + savedTrack)
-            .sortedByDescending { it.startedAtMillis }
-        hasLoadedSavedTracks = true
+        val finalName = name.ifBlank { GpxTrackStore.defaultTrackName(TrackType.CUSTOM, points.first().timeMillis) }
+        val editedTrack = editingMeasurementTrack
+        val distanceMeters = calculateRouteDistance(points)
+        val savedTrack = if (editedTrack == null) {
+            trackStore.saveTrack(
+                type = TrackType.CUSTOM,
+                points = points,
+                distanceMeters = distanceMeters,
+                startedAtMillis = points.first().timeMillis,
+                name = finalName
+            )
+        } else {
+            val updated = trackStore.saveImportedTrack(
+                ImportedTrack(
+                    name = finalName,
+                    type = TrackType.CUSTOM,
+                    points = points,
+                    distanceMeters = distanceMeters,
+                    visible = editedTrack.visible
+                )
+            )
+            if (focusedTrackFileName == editedTrack.file.name) clearTrackFocus()
+            syncManager.markDeleted(editedTrack)
+            trackStore.deleteTrack(editedTrack)
+            allSavedTracks = allSavedTracks.filterNot { it.file.name == editedTrack.file.name }
+            updated
+        }
+        replaceCachedTrack(savedTrack)
         applySavedTrackOverlays(savedTracksForMap())
         syncTracksSilently()
         loadSavedTracksAsync()
@@ -2451,12 +2489,7 @@ class MainActivity : AppCompatActivity() {
             .create()
         dialog.setOnShowListener {
             dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
-            input.postDelayed({
-                input.requestFocus()
-                input.selectAll()
-                val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
-            }, 120L)
+            showKeyboardFor(input)
         }
         dialog.show()
     }
@@ -3158,7 +3191,7 @@ class MainActivity : AppCompatActivity() {
             addView(input)
         }
 
-        MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.rename_point)
             .setView(container)
             .setNegativeButton(R.string.cancel, null)
@@ -3169,7 +3202,12 @@ class MainActivity : AppCompatActivity() {
                 loadSavedPointsOnMap()
                 if (refreshScreen) showPointsScreen()
             }
-            .show()
+            .create()
+        dialog.setOnShowListener {
+            dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+            showKeyboardFor(input)
+        }
+        dialog.show()
     }
 
     private fun showDeletePointDialog(point: SavedPoint, refreshScreen: Boolean = true) {
@@ -3307,7 +3345,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = dp(12) })
         }
-        MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.import_from_clipboard)
             .setView(container)
             .setNeutralButton(R.string.import_from_file) { _, _ -> openPointFilePicker() }
@@ -3319,13 +3357,12 @@ class MainActivity : AppCompatActivity() {
                     timeMillis = null
                 )))
             }
-            .show()
-        input.post {
-            input.requestFocus()
-            input.selectAll()
-            val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            .create()
+        dialog.setOnShowListener {
+            dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+            showKeyboardFor(input)
         }
+        dialog.show()
     }
 
     private fun openPointFilePicker() {
@@ -4316,12 +4353,7 @@ class MainActivity : AppCompatActivity() {
             val bottomSheet = (dialog as BottomSheetDialog)
                 .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
             bottomSheet?.background = ColorDrawable(Color.TRANSPARENT)
-            firstNameInput.post {
-                firstNameInput.requestFocus()
-                firstNameInput.selectAll()
-                val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                inputMethodManager.showSoftInput(firstNameInput, InputMethodManager.SHOW_IMPLICIT)
-            }
+            showKeyboardFor(firstNameInput, delayMs = 0L)
         }
         sheet.show()
     }
@@ -4934,18 +4966,22 @@ class MainActivity : AppCompatActivity() {
     ) {
         PopupMenu(this, anchor).apply {
             menu.add(0, TRACK_ACTION_RENAME, 0, R.string.rename)
+            if (track.type == TrackType.CUSTOM) {
+                menu.add(0, TRACK_ACTION_EDIT, 1, R.string.edit)
+            }
             menu.add(
                 0,
                 TRACK_ACTION_VISIBILITY,
-                1,
+                2,
                 if (track.visible) R.string.hide_from_map else R.string.show_on_map
             )
-            menu.add(0, TRACK_ACTION_SHARE, 2, R.string.share)
-            menu.add(0, TRACK_ACTION_DELETE, 3, destructiveMenuText(R.string.delete))
+            menu.add(0, TRACK_ACTION_SHARE, 3, R.string.share)
+            menu.add(0, TRACK_ACTION_DELETE, 4, destructiveMenuText(R.string.delete))
             setOnMenuItemClickListener { item ->
                 onActionSelected?.invoke()
                 when (item.itemId) {
                     TRACK_ACTION_RENAME -> showRenameDialog(track, refreshScreen)
+                    TRACK_ACTION_EDIT -> editManualTrack(track)
                     TRACK_ACTION_VISIBILITY -> {
                         if (focusedTrackFileName == track.file.name) clearTrackFocus()
                         val updated = trackStore.setTrackVisibility(track, !track.visible)
@@ -4964,6 +5000,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun editManualTrack(track: RecordedTrack) {
+        if (track.type != TrackType.CUSTOM || track.points.isEmpty()) return
+        hideSection()
+        bottomNavigation.selectedItemId = R.id.navMap
+        enterMeasurementMode(track)
+    }
+
     private fun showRenameDialog(track: RecordedTrack, refreshScreen: Boolean = true) {
         val input = EditText(this).apply {
             setText(track.name)
@@ -4975,7 +5018,7 @@ class MainActivity : AppCompatActivity() {
             addView(input)
         }
 
-        MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.rename_track)
             .setView(container)
             .setNegativeButton(R.string.cancel, null)
@@ -4987,7 +5030,12 @@ class MainActivity : AppCompatActivity() {
                 syncTracksSilently()
                 if (refreshScreen) showTracksScreen()
             }
-            .show()
+            .create()
+        dialog.setOnShowListener {
+            dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+            showKeyboardFor(input)
+        }
+        dialog.show()
     }
 
     private fun showDeleteDialog(track: RecordedTrack, refreshScreen: Boolean = true) {
@@ -6691,6 +6739,7 @@ class MainActivity : AppCompatActivity() {
         private const val PROFILE_ACTION_EDIT = 12
         private const val PROFILE_ACTION_SIGN_OUT = 13
         private const val POINT_ACTION_SHARE = 14
+        private const val TRACK_ACTION_EDIT = 15
         private const val TRACK_STROKE_WIDTH = 8f
         private const val TRACK_FOCUS_STROKE_WIDTH = 12f
         private const val TRACK_FOCUS_HALO_WIDTH = 26f

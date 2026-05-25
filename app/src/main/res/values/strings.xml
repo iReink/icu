@@ -208,4 +208,9 @@
     <string name="import_bad_file">Файл не похож на поддерживаемый GPX или ZIP</string>
     <string name="import_bad_zip">Не удалось прочитать ZIP. Проверьте, что внутри есть GPX-файлы.</string>
     <string name="import_empty_file">Файл пустой или повреждён</string>
+    <string name="edit">Редактировать</string>
+    <string name="unsaved_measurement_title">Маршрут не сохранён</string>
+    <string name="unsaved_measurement_message">Вы добавили несколько точек. Если выйти сейчас, ручной маршрут не сохранится.</string>
+    <string name="discard_route">Выйти без сохранения</string>
+    <string name="return_to_route">Вернуться и сохранить</string>
 </resources>
