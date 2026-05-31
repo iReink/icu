@@ -2160,8 +2160,8 @@ class MainActivity : AppCompatActivity() {
         showDestinationSheet(
             title = getString(R.string.destination_title),
             point = point,
-            holePoint = null,
-            holeOffsetYPx = 0,
+            holePoint = point,
+            holeOffsetYPx = destinationMarkerHighlightOffset(),
             primaryText = null,
             onPrimary = null,
             secondaryText = getString(R.string.save_point),
@@ -2363,10 +2363,30 @@ class MainActivity : AppCompatActivity() {
                 textSize = 28f
                 typeface = Typeface.DEFAULT
             })
-            addView(TextView(this@MainActivity).apply {
-                text = getString(R.string.destination_distance, distanceToPoint(point))
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
-                textSize = 16f
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(TextView(this@MainActivity).apply {
+                    text = GpxExchange.formatCoordinates(point.latitude, point.longitude)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                    textSize = 15f
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { copyCoordinates(point) }
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = distanceToPoint(point)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                    textSize = 16f
+                    gravity = Gravity.END
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        leftMargin = dp(16)
+                    }
+                })
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -2536,6 +2556,8 @@ class MainActivity : AppCompatActivity() {
     private fun savedPointHighlightOffset(point: SavedPoint): Int {
         return if (leadingEmoji(point.name) == null) -dp(14) else 0
     }
+
+    private fun destinationMarkerHighlightOffset(): Int = -dp(20)
 
     private fun hideDestinationDimOverlay() {
         val overlay = destinationDimOverlay ?: return
@@ -3229,11 +3251,15 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun copyCoordinates(point: SavedPoint) {
+    private fun copyCoordinates(point: GeoPoint) {
         val coordinates = GpxExchange.formatCoordinates(point.latitude, point.longitude)
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.points), coordinates))
         showSnackbar(getString(R.string.coordinates_copied))
+    }
+
+    private fun copyCoordinates(point: SavedPoint) {
+        copyCoordinates(point.toGeoPoint())
     }
 
     private fun sharePoint(point: SavedPoint) {
@@ -6178,15 +6204,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createSelfLocationIcon(): Bitmap {
-        val size = dp(12).coerceAtLeast(12)
+        val size = dp(22).coerceAtLeast(22)
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         val center = size / 2f
-        paint.color = Color.BLACK
-        canvas.drawCircle(center, center, center, paint)
+
+        paint.style = Paint.Style.FILL
         paint.color = Color.WHITE
-        canvas.drawCircle(center, center, dp(1).coerceAtLeast(1).toFloat(), paint)
+        canvas.drawCircle(center, center, center, paint)
+
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = dp(2).toFloat()
+        paint.color = ContextCompat.getColor(this, R.color.icu_purple_ink)
+        canvas.drawCircle(center, center, center - paint.strokeWidth / 2f, paint)
+
+        paint.style = Paint.Style.FILL
+        paint.color = Color.BLACK
+        canvas.drawCircle(center, center, dp(5).toFloat(), paint)
+
+        paint.color = Color.WHITE
+        canvas.drawCircle(center, center, dp(1.4f), paint)
         return bitmap
     }
 
