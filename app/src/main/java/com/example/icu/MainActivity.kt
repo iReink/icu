@@ -3187,18 +3187,48 @@ class MainActivity : AppCompatActivity() {
             menu.add(0, POINT_ACTION_SHARE, 2, R.string.share)
             menu.add(0, POINT_ACTION_DELETE, 3, destructiveMenuText(R.string.delete))
             setOnMenuItemClickListener { item ->
-                onActionSelected?.invoke()
                 when (item.itemId) {
-                    POINT_ACTION_RENAME -> showRenamePointDialog(point, refreshScreen)
+                    POINT_ACTION_RENAME -> {
+                        onActionSelected?.invoke()
+                        showRenamePointDialog(point, refreshScreen)
+                    }
                     POINT_ACTION_VISIBILITY -> {
+                        onActionSelected?.invoke()
                         savedPointStore.setPointVisibility(point, !point.visible)
                         skippedPointRefreshes = 1
                         syncTracksSilently()
                         loadSavedPointsOnMap()
                         if (refreshScreen) showPointsScreen()
                     }
-                    POINT_ACTION_SHARE -> sharePoint(point)
-                    POINT_ACTION_DELETE -> showDeletePointDialog(point, refreshScreen)
+                    POINT_ACTION_SHARE -> showPointShareMenu(anchor, point, onActionSelected)
+                    POINT_ACTION_DELETE -> {
+                        onActionSelected?.invoke()
+                        showDeletePointDialog(point, refreshScreen)
+                    }
+                }
+                true
+            }
+            show()
+        }
+    }
+
+    private fun showPointShareMenu(
+        anchor: View,
+        point: SavedPoint,
+        onActionSelected: (() -> Unit)? = null
+    ) {
+        PopupMenu(this, anchor).apply {
+            menu.add(0, POINT_SHARE_GPX_ICU, 0, R.string.share_point_gpx_icu)
+            menu.add(0, POINT_SHARE_YANDEX, 1, R.string.share_point_yandex)
+            menu.add(0, POINT_SHARE_2GIS, 2, R.string.share_point_2gis)
+            menu.add(0, POINT_SHARE_GOOGLE, 3, R.string.share_point_google)
+            setOnMenuItemClickListener { item ->
+                onActionSelected?.invoke()
+                when (item.itemId) {
+                    POINT_SHARE_GPX_ICU -> sharePoint(point)
+                    POINT_SHARE_YANDEX -> sharePointMapLink(point, yandexMapsUrl(point))
+                    POINT_SHARE_2GIS -> sharePointMapLink(point, twoGisUrl(point))
+                    POINT_SHARE_GOOGLE -> sharePointMapLink(point, googleMapsUrl(point))
                 }
                 true
             }
@@ -3264,6 +3294,48 @@ class MainActivity : AppCompatActivity() {
 
     private fun sharePoint(point: SavedPoint) {
         sharePoints(listOf(point))
+    }
+
+    private fun sharePointMapLink(point: SavedPoint, url: String) {
+        val coordinates = GpxExchange.formatCoordinates(point.latitude, point.longitude)
+        shareText(
+            text = getString(R.string.share_point_map_text, point.name, coordinates, url),
+            chooserTitle = getString(R.string.share_points_title)
+        )
+    }
+
+    private fun yandexMapsUrl(point: SavedPoint): String {
+        val lon = formatCoordinateForUrl(point.longitude)
+        val lat = formatCoordinateForUrl(point.latitude)
+        val zoom = mapShareZoomInt()
+        return "https://yandex.ru/maps/?ll=$lon%2C$lat&z=$zoom&pt=$lon%2C$lat%2Cpm2rdm"
+    }
+
+    private fun twoGisUrl(point: SavedPoint): String {
+        val lon = formatCoordinateForUrl(point.longitude)
+        val lat = formatCoordinateForUrl(point.latitude)
+        val zoom = mapShareZoom()
+        return "https://2gis.ru/geo/$lon%2C$lat?m=$lon%2C$lat%2F$zoom"
+    }
+
+    private fun googleMapsUrl(point: SavedPoint): String {
+        val lat = formatCoordinateForUrl(point.latitude)
+        val lon = formatCoordinateForUrl(point.longitude)
+        val zoom = mapShareZoom()
+        return "https://www.google.com/maps/@$lat,$lon,${zoom}z"
+    }
+
+    private fun mapShareZoomInt(): Int {
+        return map.zoomLevelDouble.roundToInt().coerceIn(3, 20)
+    }
+
+    private fun mapShareZoom(): String {
+        val zoom = map.zoomLevelDouble.coerceIn(3.0, 20.0)
+        return String.format(Locale.US, "%.2f", zoom).trimEnd('0').trimEnd('.')
+    }
+
+    private fun formatCoordinateForUrl(value: Double): String {
+        return String.format(Locale.US, "%.6f", value)
     }
 
     private fun shareSelectedPoints() {
@@ -5367,6 +5439,14 @@ class MainActivity : AppCompatActivity() {
         startActivity(Intent.createChooser(intent, chooserTitle))
     }
 
+    private fun shareText(text: String, chooserTitle: String) {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        startActivity(Intent.createChooser(intent, chooserTitle))
+    }
+
     private fun replaceCachedTrack(track: RecordedTrack) {
         allSavedTracks = (allSavedTracks.filterNot { it.file.name == track.file.name } + track)
             .sortedByDescending { it.startedAtMillis }
@@ -6782,6 +6862,10 @@ class MainActivity : AppCompatActivity() {
         private const val PROFILE_ACTION_SIGN_OUT = 13
         private const val POINT_ACTION_SHARE = 14
         private const val TRACK_ACTION_EDIT = 15
+        private const val POINT_SHARE_GPX_ICU = 16
+        private const val POINT_SHARE_YANDEX = 17
+        private const val POINT_SHARE_2GIS = 18
+        private const val POINT_SHARE_GOOGLE = 19
         private const val TRACK_STROKE_WIDTH = 8f
         private const val TRACK_FOCUS_STROKE_WIDTH = 12f
         private const val TRACK_FOCUS_HALO_WIDTH = 26f

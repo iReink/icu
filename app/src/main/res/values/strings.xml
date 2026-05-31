@@ -165,6 +165,11 @@
     <string name="selected_count">Выбрано %1$d из %2$d</string>
     <string name="coordinates_copied">Координаты скопированы</string>
     <string name="share_point_text">%1$s\n%2$s\nОткрыть в ICU: %3$s</string>
+    <string name="share_point_map_text">%1$s\n%2$s\n%3$s</string>
+    <string name="share_point_gpx_icu">GPX + ссылка ICU</string>
+    <string name="share_point_yandex">Яндекс.Карты</string>
+    <string name="share_point_2gis">2ГИС</string>
+    <string name="share_point_google">Google Maps</string>
     <string name="share_points_title">Точки ICU</string>
     <string name="share_track_text">%1$s\n%2$s · %3$s\n%4$s</string>
     <string name="share_tracks_title">Треки ICU</string>
