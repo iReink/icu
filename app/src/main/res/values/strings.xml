@@ -33,6 +33,11 @@
     <string name="settings">Ещё</string>
     <string name="tools">Инструменты</string>
     <string name="map_tools">Инструменты карты</string>
+    <string name="map_source_section">Источник карт</string>
+    <string name="map_source_osm">OpenStreetMap</string>
+    <string name="map_source_osm_subtitle">Текущий стандартный источник</string>
+    <string name="map_source_geoapify">Geoapify</string>
+    <string name="map_source_geoapify_subtitle">Альтернативные OSM-тайлы</string>
     <string name="recording_settings">Запись треков</string>
     <string name="ruler_tool_title">Рулетка</string>
     <string name="ruler_tool_subtitle">Построение и измерение маршрута на карте</string>

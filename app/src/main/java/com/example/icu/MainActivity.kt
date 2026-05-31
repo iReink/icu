@@ -92,9 +92,11 @@ import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
@@ -200,6 +202,23 @@ class MainActivity : AppCompatActivity() {
     private var skippedTrackRefreshes = 0
     private var skippedPointRefreshes = 0
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
+    private val geoapifyTileSource by lazy {
+        object : OnlineTileSourceBase(
+            GEOAPIFY_TILE_SOURCE_NAME,
+            1,
+            20,
+            256,
+            ".png",
+            arrayOf("https://maps.geoapify.com/v1/tile/osm-carto/")
+        ) {
+            override fun getTileURLString(pMapTileIndex: Long): String {
+                val zoom = MapTileIndex.getZoom(pMapTileIndex)
+                val x = MapTileIndex.getX(pMapTileIndex)
+                val y = MapTileIndex.getY(pMapTileIndex)
+                return "${getBaseUrl()}$zoom/$x/$y.png?apiKey=$GEOAPIFY_API_KEY"
+            }
+        }
+    }
 
     private val foregroundLocationListener = LocationListener { location ->
         lastKnownUserLocation = location
@@ -453,7 +472,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupMap() {
-        map.setTileSource(TileSourceFactory.MAPNIK)
+        applyMapTileSource(clearMemoryCache = false)
         map.setMultiTouchControls(true)
         map.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
         map.minZoomLevel = 3.0
@@ -3647,6 +3666,8 @@ class MainActivity : AppCompatActivity() {
             )
             addView(toolSectionTitle(getString(R.string.map_tools)))
             addView(rulerToolRow())
+            addView(toolSectionTitle(getString(R.string.map_source_section)))
+            addView(mapSourceRows())
             addView(toolSectionTitle(getString(R.string.recording_settings)))
             addView(settingsRow())
             addView(View(this@MainActivity), LinearLayout.LayoutParams(
@@ -3671,6 +3692,18 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         })
+    }
+
+    private fun applyMapTileSource(clearMemoryCache: Boolean = true) {
+        val tileSource = when (MapSourcePreferences.getSelectedSource(this)) {
+            MapSourceId.OSM -> TileSourceFactory.MAPNIK
+            MapSourceId.GEOAPIFY -> geoapifyTileSource
+        }
+        map.setTileSource(tileSource)
+        if (clearMemoryCache) {
+            map.tileProvider.clearTileCache()
+            map.invalidate()
+        }
     }
 
     private fun toolSectionTitle(title: String): View {
@@ -3739,6 +3772,91 @@ class MainActivity : AppCompatActivity() {
                 bottomMargin = dp(12)
             }
             addView(content)
+        }
+    }
+
+    private fun mapSourceRows(): View {
+        val selectedSource = MapSourcePreferences.getSelectedSource(this)
+        val radioButtons = mutableMapOf<MapSourceId, MaterialRadioButton>()
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        fun addSourceRow(source: MapSourceId, title: String, subtitle: String) {
+            val radioButton = MaterialRadioButton(this).apply {
+                isChecked = source == selectedSource
+                isClickable = false
+                isFocusable = false
+                buttonTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+                layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+            }
+            radioButtons[source] = radioButton
+
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), dp(10), dp(8), dp(10))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    if (MapSourcePreferences.getSelectedSource(this@MainActivity) != source) {
+                        MapSourcePreferences.setSelectedSource(this@MainActivity, source)
+                        radioButtons.forEach { (id, button) -> button.isChecked = id == source }
+                        applyMapTileSource(clearMemoryCache = true)
+                    }
+                }
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(this@MainActivity).apply {
+                        text = title
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                        textSize = 16f
+                        typeface = Typeface.DEFAULT_BOLD
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = subtitle
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                        textSize = 13f
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            topMargin = dp(2)
+                        }
+                    })
+                })
+                addView(radioButton)
+            }
+            list.addView(row, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+
+        addSourceRow(
+            source = MapSourceId.OSM,
+            title = getString(R.string.map_source_osm),
+            subtitle = getString(R.string.map_source_osm_subtitle)
+        )
+        addSourceRow(
+            source = MapSourceId.GEOAPIFY,
+            title = getString(R.string.map_source_geoapify),
+            subtitle = getString(R.string.map_source_geoapify_subtitle)
+        )
+
+        return com.google.android.material.card.MaterialCardView(this).apply {
+            radius = dp(8).toFloat()
+            cardElevation = 0f
+            strokeWidth = 0
+            setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.icu_card_surface))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(12)
+            }
+            addView(list)
         }
     }
 
@@ -6888,5 +7006,7 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_CLIPBOARD_PARSE_CHARS = 4_000
         private const val DRAG_SCROLL_ZONE_DP = 132
         private const val DRAG_SCROLL_MAX_STEP_DP = 24
+        private const val GEOAPIFY_TILE_SOURCE_NAME = "GeoapifyOSMCarto"
+        private const val GEOAPIFY_API_KEY = "e4f32d9d0a4b4db28f52f746783dc588"
     }
 }
