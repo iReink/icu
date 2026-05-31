@@ -1,8 +1,10 @@
 package com.example.icu
 
+import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
@@ -13,8 +15,13 @@ import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
 class SupabaseApiClient(
-    private val sessionStore: SupabaseSessionStore
+    private val sessionStore: SupabaseSessionStore,
+    context: Context
 ) {
+    init {
+        NetworkRouteManager.init(context)
+    }
+
     fun emailExists(email: String): Boolean {
         val body = JSONObject()
             .put("candidate_email", email)
@@ -597,7 +604,35 @@ class SupabaseApiClient(
         headers: Map<String, String>,
         body: ByteArray? = null
     ): HttpResult {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+        val primaryRoute = preferredRoute()
+        return try {
+            requestOnce(method, url, primaryRoute, headers, body)
+        } catch (error: IOException) {
+            if (primaryRoute == NetworkRoute.PROXY) throw error
+            NetworkRouteManager.markProxyRequired()
+            requestOnce(method, url, NetworkRoute.PROXY, headers, body)
+        }
+    }
+
+    private fun preferredRoute(): NetworkRoute {
+        if (!NetworkRouteManager.shouldUseProxy()) return NetworkRoute.DIRECT
+        return if (NetworkRouteManager.shouldProbeDirect() && NetworkRouteManager.probeDirectSupabase()) {
+            NetworkRouteManager.markDirectAvailable()
+            NetworkRoute.DIRECT
+        } else {
+            NetworkRoute.PROXY
+        }
+    }
+
+    private fun requestOnce(
+        method: String,
+        url: String,
+        route: NetworkRoute,
+        headers: Map<String, String>,
+        body: ByteArray? = null
+    ): HttpResult {
+        val requestUrl = NetworkRouteManager.resolveSupabaseUrl(url, route)
+        val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = TIMEOUT_MILLIS
             readTimeout = TIMEOUT_MILLIS
@@ -607,18 +642,22 @@ class SupabaseApiClient(
                 outputStream.use { it.write(body) }
             }
         }
-
-        val responseCode = connection.responseCode
-        val stream = if (responseCode in 200..299) {
-            connection.inputStream
-        } else {
-            connection.errorStream
+        try {
+            val responseCode = connection.responseCode
+            val stream = if (responseCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
+            val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
+            if (responseCode !in 200..299) {
+                throw SupabaseException(responseCode, bytes.toString(Charsets.UTF_8))
+            }
+            NetworkRouteManager.markSuccessfulRequest(route)
+            return HttpResult(bytes, bytes.toString(Charsets.UTF_8))
+        } finally {
+            connection.disconnect()
         }
-        val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
-        if (responseCode !in 200..299) {
-            throw SupabaseException(responseCode, bytes.toString(Charsets.UTF_8))
-        }
-        return HttpResult(bytes, bytes.toString(Charsets.UTF_8))
     }
 
     private fun gzip(bytes: ByteArray): ByteArray {

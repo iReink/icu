@@ -118,6 +118,7 @@
     <string name="sync_failed">Не удалось синхронизировать: %1$s</string>
     <string name="sync_in_progress">Синхронизация идёт…</string>
     <string name="sync_status_synced">Синхронизировано %1$s</string>
+    <string name="sync_status_synced_proxy">Синхронизировано через прокси %1$s</string>
     <string name="sync_status_never">Синхронизация ещё не выполнялась</string>
     <string name="unsynced_track">Трек ещё не синхронизирован</string>
     <string name="map">Карта</string>

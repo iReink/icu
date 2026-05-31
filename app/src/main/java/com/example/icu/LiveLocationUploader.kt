@@ -6,7 +6,7 @@ import android.location.Location
 class LiveLocationUploader(context: Context) {
     private val appContext = context.applicationContext
     private val sessionStore = SupabaseSessionStore(context.applicationContext)
-    private val apiClient = SupabaseApiClient(sessionStore)
+    private val apiClient = SupabaseApiClient(sessionStore, appContext)
     private val queue = LiveLocationQueue(context.applicationContext)
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 

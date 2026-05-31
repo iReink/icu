@@ -11,6 +11,7 @@ class SupabaseSyncManager(
         var uploaded = 0
         var downloaded = 0
         var deleted = 0
+        val proxySuccessCountAtStart = NetworkRouteManager.proxySuccessCount()
 
         metadataStore.deletedRemoteIds().forEach { remoteId ->
             withFreshSession({ refreshed -> session = refreshed }) { activeSession ->
@@ -90,7 +91,12 @@ class SupabaseSyncManager(
             downloaded += pointsToImport.size
         }
 
-        metadataStore.markSuccessfulSync()
+        val syncRoute = if (NetworkRouteManager.proxySuccessCount() > proxySuccessCountAtStart) {
+            NetworkRoute.PROXY
+        } else {
+            NetworkRoute.DIRECT
+        }
+        metadataStore.markSuccessfulSync(syncRoute)
         return SyncResult(uploaded, downloaded, deleted)
     }
 

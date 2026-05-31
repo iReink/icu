@@ -92,8 +92,8 @@ import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.MapTileProviderBase
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.util.MapTileIndex
@@ -202,6 +202,27 @@ class MainActivity : AppCompatActivity() {
     private var skippedTrackRefreshes = 0
     private var skippedPointRefreshes = 0
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
+    private val osmTileSource by lazy {
+        object : OnlineTileSourceBase(
+            OSM_TILE_SOURCE_NAME,
+            1,
+            20,
+            256,
+            ".png",
+            arrayOf("https://tile.openstreetmap.org/")
+        ) {
+            override fun getTileURLString(pMapTileIndex: Long): String {
+                val zoom = MapTileIndex.getZoom(pMapTileIndex)
+                val x = MapTileIndex.getX(pMapTileIndex)
+                val y = MapTileIndex.getY(pMapTileIndex)
+                return if (NetworkRouteManager.shouldUseProxy()) {
+                    "${NetworkRouteManager.PROXY_BASE_URL}/tiles/osm/$zoom/$x/$y.png"
+                } else {
+                    "${getBaseUrl()}$zoom/$x/$y.png"
+                }
+            }
+        }
+    }
     private val geoapifyTileSource by lazy {
         object : OnlineTileSourceBase(
             GEOAPIFY_TILE_SOURCE_NAME,
@@ -215,9 +236,19 @@ class MainActivity : AppCompatActivity() {
                 val zoom = MapTileIndex.getZoom(pMapTileIndex)
                 val x = MapTileIndex.getX(pMapTileIndex)
                 val y = MapTileIndex.getY(pMapTileIndex)
-                return "${getBaseUrl()}$zoom/$x/$y.png?apiKey=$GEOAPIFY_API_KEY"
+                return if (NetworkRouteManager.shouldUseProxy()) {
+                    "${NetworkRouteManager.PROXY_BASE_URL}/tiles/geoapify/$zoom/$x/$y.png?apiKey=$GEOAPIFY_API_KEY"
+                } else {
+                    "${getBaseUrl()}$zoom/$x/$y.png?apiKey=$GEOAPIFY_API_KEY"
+                }
             }
         }
+    }
+    private val tileFallbackHandler = Handler(Looper.getMainLooper()) { message ->
+        if (message.what == MapTileProviderBase.MAPTILE_FAIL_ID && NetworkRouteManager.markProxyRequired()) {
+            applyMapTileSource(clearMemoryCache = true)
+        }
+        false
     }
 
     private val foregroundLocationListener = LocationListener { location ->
@@ -302,7 +333,8 @@ class MainActivity : AppCompatActivity() {
         savedPointStore = SavedPointStore(this)
         sessionStore = SupabaseSessionStore(this)
         syncMetadataStore = SyncMetadataStore(this)
-        supabaseClient = SupabaseApiClient(sessionStore)
+        NetworkRouteManager.init(this)
+        supabaseClient = SupabaseApiClient(sessionStore, this)
         syncManager = SupabaseSyncManager(trackStore, savedPointStore, syncMetadataStore, supabaseClient)
         appLocationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         liveLocationUploader = LiveLocationUploader(this)
@@ -630,7 +662,7 @@ class MainActivity : AppCompatActivity() {
         val data = intent?.data ?: return
         val isAppInvite = data.scheme == "icu" && data.host == "friend-invite"
         val isHttpsInvite = data.scheme == "https" &&
-            data.host == "jjinirtbtgkyesewvyux.supabase.co" &&
+            isIcuLinkHost(data.host) &&
             data.path == "/functions/v1/friend-invite"
         if (!isAppInvite && !isHttpsInvite) return
         val token = data.getQueryParameter("token") ?: return
@@ -661,6 +693,10 @@ class MainActivity : AppCompatActivity() {
                 mimeType == "application/octet-stream" ||
                 mimeType == "text/plain" -> importGpxFromExternalOpen(uri)
         }
+    }
+
+    private fun isIcuLinkHost(host: String?): Boolean {
+        return host == SupabaseConfig.PROJECT_HOST || host == NetworkRouteManager.PROXY_HOST
     }
 
     @Suppress("DEPRECATION")
@@ -704,7 +740,7 @@ class MainActivity : AppCompatActivity() {
         val data = intent?.data ?: return
         val isAppShare = data.scheme == "icu" && data.host == "point-share"
         val isHttpsShare = data.scheme == "https" &&
-            data.host == "jjinirtbtgkyesewvyux.supabase.co" &&
+            isIcuLinkHost(data.host) &&
             data.path == "/functions/v1/point-share"
         if (!isAppShare && !isHttpsShare) return
         val token = data.getQueryParameter("token") ?: return
@@ -731,7 +767,7 @@ class MainActivity : AppCompatActivity() {
         val data = intent?.data ?: return
         val isAppShare = data.scheme == "icu" && data.host == "track-share"
         val isHttpsShare = data.scheme == "https" &&
-            data.host == "jjinirtbtgkyesewvyux.supabase.co" &&
+            isIcuLinkHost(data.host) &&
             data.path == "/functions/v1/track-share"
         if (!isAppShare && !isHttpsShare) return
         val token = data.getQueryParameter("token") ?: return
@@ -3400,7 +3436,7 @@ class MainActivity : AppCompatActivity() {
                     session,
                     points.map { ImportedWaypoint(it.name, it.latitude, it.longitude, null) }
                 )
-                "${SupabaseConfig.POINT_SHARE_URL}?token=$token"
+                "${NetworkRouteManager.functionUrl("/functions/v1/point-share")}?token=$token"
             }.getOrNull()
 
             val text = if (points.size == 1) {
@@ -3696,10 +3732,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyMapTileSource(clearMemoryCache: Boolean = true) {
         val tileSource = when (MapSourcePreferences.getSelectedSource(this)) {
-            MapSourceId.OSM -> TileSourceFactory.MAPNIK
+            MapSourceId.OSM -> osmTileSource
             MapSourceId.GEOAPIFY -> geoapifyTileSource
         }
         map.setTileSource(tileSource)
+        if (!map.tileProvider.getTileRequestCompleteHandlers().contains(tileFallbackHandler)) {
+            map.tileProvider.getTileRequestCompleteHandlers().add(tileFallbackHandler)
+        }
         if (clearMemoryCache) {
             map.tileProvider.clearTileCache()
             map.invalidate()
@@ -4128,10 +4167,14 @@ class MainActivity : AppCompatActivity() {
     private fun syncStatusText(): View {
         val textValue = when {
             syncInProgress -> getString(R.string.sync_in_progress)
-            syncMetadataStore.lastSuccessfulSyncAtMillis() > 0L -> getString(
-                R.string.sync_status_synced,
-                formatSyncDateTime(syncMetadataStore.lastSuccessfulSyncAtMillis())
-            )
+            syncMetadataStore.lastSuccessfulSyncAtMillis() > 0L -> {
+                val timestamp = formatSyncDateTime(syncMetadataStore.lastSuccessfulSyncAtMillis())
+                if (syncMetadataStore.wasLastSuccessfulSyncViaProxy()) {
+                    getString(R.string.sync_status_synced_proxy, timestamp)
+                } else {
+                    getString(R.string.sync_status_synced, timestamp)
+                }
+            }
             else -> getString(R.string.sync_status_never)
         }
         return TextView(this).apply {
@@ -4453,7 +4496,7 @@ class MainActivity : AppCompatActivity() {
             runCatching {
                 val session = supabaseClient.activeSession()
                 val token = supabaseClient.createFriendInvite(session)
-                "${SupabaseConfig.FRIEND_INVITE_URL}?token=$token"
+                "${NetworkRouteManager.functionUrl("/functions/v1/friend-invite")}?token=$token"
             }.onSuccess { link ->
                 runOnUiThread {
                     val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -5339,7 +5382,7 @@ class MainActivity : AppCompatActivity() {
             val link = runCatching {
                 val session = sessionStore.current() ?: return@runCatching null
                 val token = supabaseClient.createTrackShare(session, selected)
-                "${SupabaseConfig.TRACK_SHARE_URL}?token=$token"
+                "${NetworkRouteManager.functionUrl("/functions/v1/track-share")}?token=$token"
             }.getOrNull()
 
             if (link == null && sessionStore.current() != null) {
@@ -7006,6 +7049,7 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_CLIPBOARD_PARSE_CHARS = 4_000
         private const val DRAG_SCROLL_ZONE_DP = 132
         private const val DRAG_SCROLL_MAX_STEP_DP = 24
+        private const val OSM_TILE_SOURCE_NAME = "Mapnik"
         private const val GEOAPIFY_TILE_SOURCE_NAME = "GeoapifyOSMCarto"
         private const val GEOAPIFY_API_KEY = "e4f32d9d0a4b4db28f52f746783dc588"
     }

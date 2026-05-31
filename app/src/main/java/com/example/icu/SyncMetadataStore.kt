@@ -72,9 +72,14 @@ class SyncMetadataStore(context: Context) {
         return prefs.getLong(LAST_SUCCESSFUL_SYNC_AT, 0L)
     }
 
-    fun markSuccessfulSync() {
+    fun wasLastSuccessfulSyncViaProxy(): Boolean {
+        return prefs.getString(LAST_SUCCESSFUL_SYNC_ROUTE, NetworkRoute.DIRECT.name) == NetworkRoute.PROXY.name
+    }
+
+    fun markSuccessfulSync(route: NetworkRoute) {
         prefs.edit()
             .putLong(LAST_SUCCESSFUL_SYNC_AT, System.currentTimeMillis())
+            .putString(LAST_SUCCESSFUL_SYNC_ROUTE, route.name)
             .apply()
     }
 
@@ -87,5 +92,6 @@ class SyncMetadataStore(context: Context) {
         private const val PREFS_NAME = "track_sync"
         private const val DELETED_PREFIX = "deleted."
         private const val LAST_SUCCESSFUL_SYNC_AT = "last_successful_sync_at"
+        private const val LAST_SUCCESSFUL_SYNC_ROUTE = "last_successful_sync_route"
     }
 }
