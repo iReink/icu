@@ -86,6 +86,7 @@ import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
+import com.google.android.material.shape.CornerFamily
 import androidx.viewpager2.widget.ViewPager2
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.MapEventsReceiver
@@ -2471,24 +2472,24 @@ class MainActivity : AppCompatActivity() {
                             sheet.dismiss()
                             onSecondary()
                         }
-                        layoutParams = LinearLayout.LayoutParams(0, dp(32), 1f).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply {
                             marginEnd = dp(8)
                         }
                     })
                     addView(MaterialButton(this@MainActivity).apply {
                         text = primaryText
-                        applyPrimaryFilledButton(heightDp = 32)
+                        applyPrimaryFilledButton(heightDp = 36)
                         setOnClickListener {
                             sheet.dismiss()
                             onPrimary()
                         }
-                        layoutParams = LinearLayout.LayoutParams(0, dp(32), 1f).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, dp(36), 1f).apply {
                             marginStart = dp(8)
                         }
                     })
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
+                        dp(44)
                     )
                 })
             } else if (primaryText != null && onPrimary != null) {
@@ -6170,7 +6171,13 @@ class MainActivity : AppCompatActivity() {
         minimumWidth = 0
         insetTop = 0
         insetBottom = 0
-        cornerRadius = dp(heightDp / 2)
+        val radius = dp(heightDp / 2).toFloat()
+        cornerRadius = radius.roundToInt()
+        shapeAppearanceModel = shapeAppearanceModel
+            .toBuilder()
+            .setAllCorners(CornerFamily.ROUNDED, radius)
+            .build()
+        clipToOutline = true
         elevation = dp(3).toFloat()
         backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_primary_button)
         setTextColor(ContextCompat.getColor(this@MainActivity, R.color.white))
