@@ -9,6 +9,7 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.Base64
 import java.util.Locale
 import java.util.zip.GZIPInputStream
@@ -500,7 +501,7 @@ class SupabaseApiClient(
                 longitude = item.getDouble("longitude"),
                 altitude = item.optDoubleOrNull("altitude"),
                 accuracyMeters = item.optDoubleOrNull("accuracy_meters")?.toFloat(),
-                recordedAtMillis = Instant.parse(item.getString("recorded_at")).toEpochMilli()
+                recordedAtMillis = parseSupabaseTimestampMillis(item.getString("recorded_at"))
             )
         }.sortedBy { it.recordedAtMillis }
     }
@@ -526,15 +527,16 @@ class SupabaseApiClient(
             activityType = TrackType.fromGpxType(json.getString("activity_type")),
             distanceMeters = json.optDouble("distance_meters", 0.0).toFloat(),
             durationMillis = json.optLong("duration_millis", 0L),
-            startedAtMillis = Instant.parse(json.getString("started_at")).toEpochMilli(),
-            endedAtMillis = endedAt?.let { Instant.parse(it).toEpochMilli() },
+            startedAtMillis = parseSupabaseTimestampMillis(json.getString("started_at")),
+            endedAtMillis = endedAt?.let { parseSupabaseTimestampMillis(it) },
             storagePath = json.getString("storage_path"),
             visible = json.optBoolean("visible", true),
-            updatedAtMillis = Instant.parse(json.getString("updated_at")).toEpochMilli()
+            updatedAtMillis = parseSupabaseTimestampMillis(json.getString("updated_at"))
         )
     }
 
     private fun parseRemoteSavedPoint(json: JSONObject): RemoteSavedPoint {
+        val createdAtMillis = parseSupabaseTimestampMillis(json.getString("created_at"))
         return RemoteSavedPoint(
             id = json.getString("id"),
             userId = json.getString("user_id"),
@@ -542,10 +544,20 @@ class SupabaseApiClient(
             latitude = json.getDouble("latitude"),
             longitude = json.getDouble("longitude"),
             visible = json.optBoolean("visible", true),
-            sortOrder = json.optLong("sort_order", -Instant.parse(json.getString("created_at")).toEpochMilli()),
-            createdAtMillis = Instant.parse(json.getString("created_at")).toEpochMilli(),
-            updatedAtMillis = Instant.parse(json.getString("updated_at")).toEpochMilli()
+            sortOrder = json.optLong("sort_order", -createdAtMillis),
+            createdAtMillis = createdAtMillis,
+            updatedAtMillis = parseSupabaseTimestampMillis(json.getString("updated_at"))
         )
+    }
+
+    private fun parseSupabaseTimestampMillis(value: String): Long {
+        val text = value.trim()
+        val instant = runCatching { Instant.parse(text) }
+            .recoverCatching { OffsetDateTime.parse(text).toInstant() }
+            .getOrElse { error ->
+                throw IllegalArgumentException("Could not parse Supabase timestamp: $text", error)
+            }
+        return instant.toEpochMilli()
     }
 
     private fun RemoteTrack.toJson(): JSONObject {
