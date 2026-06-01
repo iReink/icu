@@ -1176,9 +1176,9 @@ class MainActivity : AppCompatActivity() {
 
             addView(MaterialButton(this@MainActivity).apply {
                 text = primaryText
-                isAllCaps = false
+                applyPrimaryFilledButton(heightDp = 32)
                 setOnClickListener { onPrimary() }
-                layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+                layoutParams = LinearLayout.LayoutParams(0, dp(32), 1f).apply {
                     leftMargin = dp(8)
                 }
             })
@@ -1363,13 +1363,19 @@ class MainActivity : AppCompatActivity() {
         content.findViewById<MaterialButton>(R.id.cancelAddTrackButton).setOnClickListener {
             sheet.dismiss()
         }
-        content.findViewById<MaterialButton>(R.id.startTrackButton).setOnClickListener {
-            val selectedType = when (content.findViewById<RadioGroup>(R.id.addTrackTypeGroup).checkedRadioButtonId) {
-                R.id.bikeTrackRadio -> TrackType.BIKE
-                else -> TrackType.WALK
+        content.findViewById<MaterialButton>(R.id.startTrackButton).apply {
+            applyPrimaryFilledButton(heightDp = 32)
+            layoutParams = (layoutParams as LinearLayout.LayoutParams).apply {
+                height = dp(32)
             }
-            sheet.dismiss()
-            requestStartRecording(selectedType)
+            setOnClickListener {
+                val selectedType = when (content.findViewById<RadioGroup>(R.id.addTrackTypeGroup).checkedRadioButtonId) {
+                    R.id.bikeTrackRadio -> TrackType.BIKE
+                    else -> TrackType.WALK
+                }
+                sheet.dismiss()
+                requestStartRecording(selectedType)
+            }
         }
         addTrackSheet = sheet
         sheet.show()
@@ -2450,21 +2456,56 @@ class MainActivity : AppCompatActivity() {
                     bottomMargin = dp(18)
                 }
             })
-            if (primaryText != null && onPrimary != null) {
+            if (primaryText != null && onPrimary != null && secondaryText != null && onSecondary != null) {
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(MaterialButton(this@MainActivity).apply {
+                        text = secondaryText
+                        isAllCaps = false
+                        backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                        elevation = 0f
+                        stateListAnimator = null
+                        setOnClickListener {
+                            sheet.dismiss()
+                            onSecondary()
+                        }
+                        layoutParams = LinearLayout.LayoutParams(0, dp(32), 1f).apply {
+                            marginEnd = dp(8)
+                        }
+                    })
+                    addView(MaterialButton(this@MainActivity).apply {
+                        text = primaryText
+                        applyPrimaryFilledButton(heightDp = 32)
+                        setOnClickListener {
+                            sheet.dismiss()
+                            onPrimary()
+                        }
+                        layoutParams = LinearLayout.LayoutParams(0, dp(32), 1f).apply {
+                            marginStart = dp(8)
+                        }
+                    })
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                })
+            } else if (primaryText != null && onPrimary != null) {
                 addView(MaterialButton(this@MainActivity).apply {
                     text = primaryText
-                    isAllCaps = false
+                    applyPrimaryFilledButton(heightDp = 36)
                     setOnClickListener {
                         sheet.dismiss()
                         onPrimary()
                     }
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(52)
+                        dp(36)
                     )
                 })
             }
-            if (secondaryText != null && onSecondary != null) {
+            if (primaryText == null && secondaryText != null && onSecondary != null) {
                 addView(MaterialButton(this@MainActivity).apply {
                     text = secondaryText
                     isAllCaps = false
@@ -4339,14 +4380,14 @@ class MainActivity : AppCompatActivity() {
                 })
                 addView(MaterialButton(this@MainActivity).apply {
                     text = getString(R.string.location_broadcast_enable)
-                    isAllCaps = false
+                    applyPrimaryFilledButton(heightDp = 32)
                     setOnClickListener {
                         sheet.dismiss()
                         requestStartLocationBroadcast(selectedDurationMs)
                     }
                     layoutParams = LinearLayout.LayoutParams(
                         0,
-                        dp(48),
+                        dp(32),
                         1f
                     )
                 })
@@ -4591,11 +4632,7 @@ class MainActivity : AppCompatActivity() {
             })
             addView(MaterialButton(this@MainActivity).apply {
                 text = getString(R.string.save)
-                isAllCaps = false
-                textSize = 16f
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
-                backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_surface)
-                cornerRadius = dp(8)
+                applyPrimaryFilledButton(heightDp = 36)
                 setOnClickListener {
                     sheet.dismiss()
                     onSave(
@@ -4605,7 +4642,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(56)
+                    dp(36)
                 ).apply { topMargin = dp(18) }
             })
         }
@@ -6111,16 +6148,32 @@ class MainActivity : AppCompatActivity() {
     private fun primaryFullWidthButton(textValue: String, onClick: () -> Unit): View {
         return MaterialButton(this).apply {
             text = textValue
-            isAllCaps = false
-            letterSpacing = 0f
+            applyPrimaryFilledButton(heightDp = 36)
             setOnClickListener { onClick() }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(52)
+                dp(36)
             ).apply {
                 bottomMargin = dp(12)
             }
         }
+    }
+
+    private fun MaterialButton.applyPrimaryFilledButton(heightDp: Int) {
+        isAllCaps = false
+        letterSpacing = 0f
+        textSize = 12f
+        typeface = Typeface.DEFAULT_BOLD
+        minHeight = 0
+        minWidth = 0
+        minimumHeight = 0
+        minimumWidth = 0
+        insetTop = 0
+        insetBottom = 0
+        cornerRadius = dp(heightDp / 2)
+        elevation = dp(3).toFloat()
+        backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_primary_button)
+        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.white))
     }
 
     private fun destructiveGhostButton(textValue: String, onClick: () -> Unit): View {
