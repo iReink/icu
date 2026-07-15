@@ -88,18 +88,38 @@ object TrackTrimAnalyzer {
         val motion = MutableList(points.size) { PointMotion(active = false, speed = 0.0) }
 
         segmentBounds.forEach { bounds ->
+            val cumulativeDistance = FloatArray(bounds.last - bounds.first + 1)
+            if (bounds.first < bounds.last) {
+                for (index in (bounds.first + 1)..bounds.last) {
+                    cumulativeDistance[index - bounds.first] =
+                        cumulativeDistance[index - bounds.first - 1] +
+                        TrackGeometry.distanceMeters(points[index - 1], points[index])
+                }
+            }
+            val segmentStartTime = points[bounds.first].timeMillis
+            val segmentEndTime = points[bounds.last].timeMillis
+            var left = bounds.first
+            var right = bounds.first
             for (index in bounds) {
                 val halfWindow = config.windowMillis / 2L
-                var left = index
-                while (left > bounds.first && points[index].timeMillis - points[left - 1].timeMillis <= halfWindow) left--
-                var right = index
-                while (right < bounds.last && points[right + 1].timeMillis - points[index].timeMillis <= halfWindow) right++
+                val centerTime = points[index].timeMillis
+                var windowStart = centerTime - halfWindow
+                var windowEnd = centerTime + halfWindow
+                if (windowStart < segmentStartTime) {
+                    windowEnd = min(segmentEndTime, windowEnd + segmentStartTime - windowStart)
+                    windowStart = segmentStartTime
+                }
+                if (windowEnd > segmentEndTime) {
+                    windowStart = max(segmentStartTime, windowStart - (windowEnd - segmentEndTime))
+                    windowEnd = segmentEndTime
+                }
+                while (left < index && points[left].timeMillis < windowStart) left++
+                if (right < index) right = index
+                while (right < bounds.last && points[right + 1].timeMillis <= windowEnd) right++
                 if (right <= left) continue
 
-                var pathDistance = 0f
-                for (pointIndex in (left + 1)..right) {
-                    pathDistance += TrackGeometry.distanceMeters(points[pointIndex - 1], points[pointIndex])
-                }
+                val pathDistance = cumulativeDistance[right - bounds.first] -
+                    cumulativeDistance[left - bounds.first]
                 val elapsedSeconds = (points[right].timeMillis - points[left].timeMillis) / 1000.0
                 if (elapsedSeconds <= 0.0 || pathDistance <= 0f) continue
                 val displacement = TrackGeometry.distanceMeters(points[left], points[right])
@@ -240,6 +260,7 @@ class TrackTrimEditorModel(
 
     val hasChanges: Boolean get() = history.isNotEmpty()
     val canUndo: Boolean get() = history.isNotEmpty()
+    val hasPassiveSections: Boolean get() = retainedSections().any { !it.kind.isActive }
     val canSave: Boolean get() = retainedSections().any { it.kind.isActive } && buildPoints().size >= 2
 
     fun displaySections(): List<TrackTrimDisplaySection> {
@@ -312,10 +333,27 @@ class TrackTrimEditorModel(
         retainedIds.addAll(previous)
     }
 
+    fun deleteAllPassive() {
+        val passiveIds = retainedSections().filterNot { it.kind.isActive }.mapTo(mutableSetOf()) { it.id }
+        if (passiveIds.isEmpty()) return
+        history.add(retainedIds.toSet())
+        retainedIds.removeAll(passiveIds)
+        pruneOuterPassiveSections()
+    }
+
+    fun pointsForDisplaySection(displaySectionId: String): List<TrackPoint> {
+        val sectionIds = displaySections().firstOrNull { it.id == displaySectionId }?.sourceIds ?: return emptyList()
+        return buildPoints(sections.filter { sectionIds.contains(it.id) })
+    }
+
     fun buildPoints(): List<TrackPoint> {
+        return buildPoints(retainedSections())
+    }
+
+    private fun buildPoints(sourceSections: List<AnalyzedTrackSection>): List<TrackPoint> {
         val result = mutableListOf<TrackPoint>()
         var previousSourceIndex: Int? = null
-        retainedSections().forEach { section ->
+        sourceSections.forEach { section ->
             for (index in section.startIndex..section.endIndex) {
                 val point = points[index]
                 val startsNewSegment = result.isNotEmpty() &&

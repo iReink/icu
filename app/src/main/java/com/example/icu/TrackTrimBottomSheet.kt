@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -34,11 +35,13 @@ import kotlin.math.roundToInt
 class TrackTrimBottomSheet(
     private val activity: AppCompatActivity,
     private val model: TrackTrimEditorModel,
+    private val onPreview: (List<TrackPoint>, TrackTrimDisplaySection) -> Unit,
     private val onSave: (List<TrackPoint>, (Result<RecordedTrack>) -> Unit) -> Unit
 ) {
     private val dialog = BottomSheetDialog(activity)
     private lateinit var adapter: SectionAdapter
     private lateinit var undoButton: MaterialButton
+    private lateinit var removePassiveButton: MaterialButton
     private lateinit var summaryText: TextView
     private lateinit var saveButton: MaterialButton
     private var saving = false
@@ -116,6 +119,10 @@ class TrackTrimBottomSheet(
             itemAnimator?.changeDuration = 140L
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
             setHasFixedSize(false)
+            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                val measuredHeight = height
+                post { this@TrackTrimBottomSheet.adapter.updateAvailableHeight(measuredHeight) }
+            }
         }
         ItemTouchHelper(SectionSwipeCallback { sectionId ->
             model.delete(sectionId)
@@ -127,7 +134,10 @@ class TrackTrimBottomSheet(
             strokeWidth = 0
             setCardBackgroundColor(Color.WHITE)
             clipToOutline = true
-            addView(recycler)
+            addView(recycler, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            ))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
@@ -136,25 +146,15 @@ class TrackTrimBottomSheet(
         }
         root.addView(timelineCard)
 
-        undoButton = MaterialButton(activity).apply {
-            text = activity.getString(R.string.undo_last_trim)
-            isAllCaps = false
-            letterSpacing = 0f
-            textSize = 14f
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
-            setTextColor(ContextCompat.getColor(activity, R.color.icu_primary_button))
-            elevation = 0f
-            stateListAnimator = null
-            setPadding(0, 0, 0, 0)
-            setOnClickListener {
-                model.undo()
-                refresh()
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(44)
-            ).apply { topMargin = dp(4) }
+        removePassiveButton = textActionButton(activity.getString(R.string.trim_remove_all_passive)) {
+            model.deleteAllPassive()
+            refresh()
+        }
+        root.addView(removePassiveButton)
+
+        undoButton = textActionButton(activity.getString(R.string.undo_last_trim)) {
+            model.undo()
+            refresh()
         }
         root.addView(undoButton)
 
@@ -185,6 +185,7 @@ class TrackTrimBottomSheet(
 
     private fun refresh() {
         adapter.submit(model.displaySections())
+        removePassiveButton.visibility = if (model.hasPassiveSections) View.VISIBLE else View.GONE
         undoButton.visibility = if (model.canUndo) View.VISIBLE else View.INVISIBLE
         val distance = formatDistance(model.distanceMeters())
         val duration = formatDuration(model.durationMillis())
@@ -239,6 +240,26 @@ class TrackTrimBottomSheet(
         }
     }
 
+    private fun textActionButton(label: String, onClick: () -> Unit): MaterialButton {
+        return MaterialButton(activity).apply {
+            text = label
+            isAllCaps = false
+            letterSpacing = 0f
+            textSize = 14f
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
+            setTextColor(ContextCompat.getColor(activity, R.color.icu_primary_button))
+            elevation = 0f
+            stateListAnimator = null
+            setPadding(0, 0, 0, 0)
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(40)
+            ).apply { topMargin = dp(2) }
+        }
+    }
+
     private fun MaterialButton.styleButton(filled: Boolean) {
         isAllCaps = false
         letterSpacing = 0f
@@ -267,10 +288,12 @@ class TrackTrimBottomSheet(
     }
 
     private inner class SectionAdapter(
-        private val availableHeight: Int
+        initialAvailableHeight: Int
     ) : RecyclerView.Adapter<SectionHolder>() {
         private var sections: List<TrackTrimDisplaySection> = emptyList()
         private var totalDuration = 1L
+        private var availableHeight = initialAvailableHeight
+        private var rowHeights: List<Int> = emptyList()
 
         init { setHasStableIds(true) }
 
@@ -294,26 +317,50 @@ class TrackTrimBottomSheet(
             val section = sections[position]
             holder.itemView.layoutParams = RecyclerView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                sectionHeight(section)
+                sectionHeight(position)
             )
             holder.stripe.setBackgroundColor(
                 if (section.isActive) ContextCompat.getColor(activity, R.color.icu_primary_button)
                 else PASSIVE_SECTION_COLOR
             )
             holder.labels.removeAllViews()
-            if (!section.isActive) return
-            val isShort = sectionHeight(section) <= dp(64) && sections.size > 1
+            holder.itemView.setOnLongClickListener {
+                val points = model.pointsForDisplaySection(section.id)
+                if (points.isEmpty()) return@setOnLongClickListener false
+                it.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                onPreview(points, section)
+                true
+            }
+            val isShort = sectionHeight(position) <= dp(72) && sections.size > 1
             if (isShort) {
-                holder.labels.addView(label(startLabel(section, position)), FrameLayout.LayoutParams(
+                holder.labels.addView(label(compactLabel(section, position)), FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    Gravity.START or Gravity.CENTER_VERTICAL
+                    Gravity.CENTER_VERTICAL
                 ))
-                holder.labels.addView(label(endLabel(section, position)), FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    Gravity.END or Gravity.CENTER_VERTICAL
-                ))
+            } else if (!section.isActive) {
+                if (position == 0) {
+                    holder.labels.addView(label(startLabel(section, position)), FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP
+                    ))
+                }
+                holder.labels.addView(
+                    label(activity.getString(R.string.trim_pause, formatSectionDuration(section.durationMillis))),
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.CENTER_VERTICAL
+                    )
+                )
+                if (position == sections.lastIndex) {
+                    holder.labels.addView(label(endLabel(section, position)), FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.BOTTOM
+                    ))
+                }
             } else {
                 holder.labels.addView(label(startLabel(section, position)), FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -335,6 +382,8 @@ class TrackTrimBottomSheet(
         fun submit(updated: List<TrackTrimDisplaySection>) {
             val previous = sections
             totalDuration = updated.sumOf { max(it.durationMillis, 1_000L) }.coerceAtLeast(1L)
+            sections = updated
+            calculateRowHeights()
             val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
                 override fun getOldListSize() = previous.size
                 override fun getNewListSize() = updated.size
@@ -343,14 +392,33 @@ class TrackTrimBottomSheet(
                 override fun areContentsTheSame(oldItemPosition: Int, newItemPosition: Int) =
                     previous[oldItemPosition] == updated[newItemPosition]
             })
-            sections = updated
             diff.dispatchUpdatesTo(this)
         }
 
-        private fun sectionHeight(section: TrackTrimDisplaySection): Int {
-            val proportional = availableHeight * max(section.durationMillis, 1_000L) / totalDuration
-            val minimum = if (sections.size == 1) dp(80) else dp(52)
-            return max(minimum, proportional.toInt())
+        fun updateAvailableHeight(updatedHeight: Int) {
+            if (updatedHeight <= 0 || updatedHeight == availableHeight) return
+            availableHeight = updatedHeight
+            calculateRowHeights()
+            notifyItemRangeChanged(0, itemCount)
+        }
+
+        private fun calculateRowHeights() {
+            if (sections.isEmpty()) {
+                rowHeights = emptyList()
+                return
+            }
+            val minimum = if (sections.size == 1) dp(80) else dp(44)
+            val heights = sections.map { section ->
+                val proportional = availableHeight * max(section.durationMillis, 1_000L) / totalDuration
+                max(minimum, proportional.toInt())
+            }.toMutableList()
+            val remainder = availableHeight - heights.sum()
+            if (remainder > 0) heights[heights.lastIndex] += remainder
+            rowHeights = heights
+        }
+
+        private fun sectionHeight(position: Int): Int {
+            return rowHeights.getOrElse(position) { dp(80) }
         }
 
         private fun startLabel(section: TrackTrimDisplaySection, position: Int): String {
@@ -365,6 +433,24 @@ class TrackTrimBottomSheet(
                 activity.getString(R.string.trim_finish, time, formatDistance(section.endDistanceMeters))
             } else {
                 "$time · ${formatDistance(section.endDistanceMeters)}"
+            }
+        }
+
+        private fun compactLabel(section: TrackTrimDisplaySection, position: Int): String {
+            val content = if (section.isActive) {
+                activity.getString(
+                    R.string.trim_compact_range,
+                    formatTime(section.startTimeMillis),
+                    formatTime(section.endTimeMillis),
+                    formatDistance(section.endDistanceMeters - section.startDistanceMeters)
+                )
+            } else {
+                activity.getString(R.string.trim_pause, formatSectionDuration(section.durationMillis))
+            }
+            return when (position) {
+                0 -> activity.getString(R.string.trim_compact_start, content)
+                sections.lastIndex -> activity.getString(R.string.trim_compact_finish, content)
+                else -> content
             }
         }
 
@@ -442,6 +528,16 @@ class TrackTrimBottomSheet(
         val minutes = totalMinutes % 60L
         return if (hours > 0) activity.getString(R.string.trim_duration_hours, hours, minutes)
         else activity.getString(R.string.trim_duration_minutes, minutes)
+    }
+
+    private fun formatSectionDuration(millis: Long): String {
+        val totalSeconds = (millis / 1_000L).coerceAtLeast(1L)
+        if (totalSeconds < 60L) return activity.getString(R.string.trim_duration_seconds, totalSeconds)
+        val totalMinutes = totalSeconds / 60L
+        val hours = totalMinutes / 60L
+        val minutes = totalMinutes % 60L
+        return if (hours > 0L) activity.getString(R.string.trim_duration_hours, hours, minutes)
+        else activity.getString(R.string.trim_duration_minutes, totalMinutes)
     }
 
     private fun dp(value: Int): Int = (value * activity.resources.displayMetrics.density).roundToInt()

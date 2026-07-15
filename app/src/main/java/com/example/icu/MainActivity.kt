@@ -1,6 +1,7 @@
 package com.example.icu
 
 import android.Manifest
+import android.app.Dialog
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.content.BroadcastReceiver
@@ -46,6 +47,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.EditorInfo
@@ -81,6 +83,7 @@ import com.google.android.material.datepicker.MaterialDatePicker
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.radiobutton.MaterialRadioButton
+import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
@@ -203,6 +206,8 @@ class MainActivity : AppCompatActivity() {
     private var skippedTrackRefreshes = 0
     private var skippedPointRefreshes = 0
     private val backgroundExecutor = Executors.newSingleThreadExecutor()
+    private val trackAnalysisExecutor = Executors.newSingleThreadExecutor()
+    private var trackAnalysisOverlay: View? = null
     private val osmTileSource by lazy {
         object : OnlineTileSourceBase(
             OSM_TILE_SOURCE_NAME,
@@ -406,6 +411,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         backgroundExecutor.shutdown()
+        trackAnalysisExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -5326,12 +5332,18 @@ class MainActivity : AppCompatActivity() {
             showSnackbar(getString(R.string.trim_track_unavailable), isLong = true)
             return
         }
-        backgroundExecutor.execute {
+        showTrackAnalysisLoader()
+        trackAnalysisExecutor.execute {
             val analysis = runCatching { TrackTrimAnalyzer.analyze(track.points, track.type) }
             runOnUiThread {
+                hideTrackAnalysisLoader()
                 analysis.onSuccess { sections ->
                     val model = TrackTrimEditorModel(track.points, sections)
-                    TrackTrimBottomSheet(this, model) { points, completion ->
+                    TrackTrimBottomSheet(
+                        activity = this,
+                        model = model,
+                        onPreview = { points, section -> showTrackSectionPreview(points, section, track.type) }
+                    ) { points, completion ->
                         backgroundExecutor.execute {
                             val saveResult = runCatching { trackStore.replaceTrackPoints(track, points) }
                             runOnUiThread {
@@ -5354,6 +5366,185 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun showTrackAnalysisLoader() {
+        hideTrackAnalysisLoader()
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(0x88000000.toInt())
+            isClickable = true
+            isFocusable = true
+            elevation = dp(32).toFloat()
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                addView(CircularProgressIndicator(this@MainActivity).apply {
+                    isIndeterminate = true
+                    indicatorSize = dp(48)
+                    trackThickness = dp(4)
+                    setIndicatorColor(Color.WHITE)
+                }, LinearLayout.LayoutParams(dp(48), dp(48)).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = getString(R.string.trim_analysis_in_progress)
+                    setTextColor(Color.WHITE)
+                    textSize = 15f
+                    gravity = Gravity.CENTER
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    topMargin = dp(16)
+                })
+            }, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            ))
+        }
+        trackAnalysisOverlay = overlay
+        contentHost.addView(overlay, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+        overlay.alpha = 0f
+        overlay.animate().alpha(1f).setDuration(120L).start()
+    }
+
+    private fun hideTrackAnalysisLoader() {
+        val overlay = trackAnalysisOverlay ?: return
+        trackAnalysisOverlay = null
+        overlay.animate().alpha(0f).setDuration(100L).withEndAction {
+            (overlay.parent as? ViewGroup)?.removeView(overlay)
+        }.start()
+    }
+
+    private fun showTrackSectionPreview(
+        points: List<TrackPoint>,
+        section: TrackTrimDisplaySection,
+        type: TrackType
+    ) {
+        if (points.isEmpty()) return
+        val previewMap = MapView(this).apply {
+            setTileSource(when (MapSourcePreferences.getSelectedSource(this@MainActivity)) {
+                MapSourceId.OSM -> osmTileSource
+                MapSourceId.GEOAPIFY -> geoapifyTileSource
+            })
+            zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+            setMultiTouchControls(false)
+            isTilesScaledToDpi = true
+        }
+        val routeColor = when (type) {
+            TrackType.WALK -> Color.BLACK
+            TrackType.BIKE -> ContextCompat.getColor(this, R.color.icu_blue_track)
+            TrackType.CUSTOM -> ContextCompat.getColor(this, R.color.icu_primary_button)
+        }
+        points.connectedSegments().forEach { segment ->
+            if (segment.size < 2) return@forEach
+            val geoPoints = segment.map { GeoPoint(it.latitude, it.longitude) }
+            previewMap.overlays.add(Polyline(previewMap).apply {
+                outlinePaint.color = Color.WHITE
+                outlinePaint.strokeWidth = dp(8).toFloat()
+                outlinePaint.strokeCap = Paint.Cap.ROUND
+                outlinePaint.strokeJoin = Paint.Join.ROUND
+                setPoints(geoPoints)
+            })
+            previewMap.overlays.add(Polyline(previewMap).apply {
+                outlinePaint.color = routeColor
+                outlinePaint.strokeWidth = dp(4).toFloat()
+                outlinePaint.strokeCap = Paint.Cap.ROUND
+                outlinePaint.strokeJoin = Paint.Join.ROUND
+                setPoints(geoPoints)
+            })
+        }
+        val card = MaterialCardView(this).apply {
+            radius = dp(24).toFloat()
+            cardElevation = dp(10).toFloat()
+            strokeWidth = 0
+            setCardBackgroundColor(Color.WHITE)
+            clipToOutline = true
+            isClickable = true
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(previewMap, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                ))
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(18), dp(10), dp(18), dp(10))
+                    addView(TextView(this@MainActivity).apply {
+                        text = getString(R.string.trim_preview_title)
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                        textSize = 16f
+                        typeface = Typeface.DEFAULT_BOLD
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = getString(
+                            R.string.trim_preview_summary,
+                            TRIM_PREVIEW_TIME_FORMATTER.format(Instant.ofEpochMilli(section.startTimeMillis)),
+                            TRIM_PREVIEW_TIME_FORMATTER.format(Instant.ofEpochMilli(section.endTimeMillis)),
+                            formatDistance(section.endDistanceMeters - section.startDistanceMeters)
+                        )
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                        textSize = 13f
+                    })
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(72)
+                ))
+            })
+        }
+        val previewRoot = FrameLayout(this).apply {
+            setPadding(dp(24), dp(48), dp(24), dp(48))
+            addView(card, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(420),
+                Gravity.CENTER
+            ))
+        }
+        val dialog = Dialog(this).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            setContentView(previewRoot)
+            setCanceledOnTouchOutside(true)
+            setOnShowListener {
+                window?.apply {
+                    setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                    setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                    attributes = attributes.apply { dimAmount = 0.58f }
+                }
+                previewMap.onResume()
+                card.alpha = 0f
+                card.scaleX = 0.94f
+                card.scaleY = 0.94f
+                card.animate().alpha(1f).scaleX(1f).scaleY(1f)
+                    .setDuration(170L).setInterpolator(DecelerateInterpolator()).start()
+                previewMap.post {
+                    val north = points.maxOf { it.latitude }
+                    val south = points.minOf { it.latitude }
+                    val east = points.maxOf { it.longitude }
+                    val west = points.minOf { it.longitude }
+                    if (north == south && east == west) {
+                        previewMap.controller.setZoom(18.0)
+                        previewMap.controller.setCenter(GeoPoint(north, east))
+                    } else {
+                        previewMap.zoomToBoundingBox(BoundingBox(north, east, south, west), false, dp(36))
+                    }
+                    previewMap.invalidate()
+                }
+            }
+            setOnDismissListener {
+                previewMap.onPause()
+                previewMap.onDetach()
+            }
+        }
+        previewRoot.setOnClickListener { dialog.dismiss() }
+        dialog.show()
     }
 
     private fun showRenameDialog(track: RecordedTrack, refreshScreen: Boolean = true) {
@@ -7123,6 +7314,8 @@ class MainActivity : AppCompatActivity() {
     private class SavedPointHolder(val container: FrameLayout) : RecyclerView.ViewHolder(container)
 
     companion object {
+        private val TRIM_PREVIEW_TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm")
+            .withZone(ZoneId.systemDefault())
         private const val TRACK_ACTION_RENAME = 1
         private const val TRACK_ACTION_VISIBILITY = 2
         private const val TRACK_ACTION_DELETE = 3

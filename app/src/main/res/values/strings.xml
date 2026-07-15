@@ -227,6 +227,12 @@
     <string name="trim_track_action">Обрезать</string>
     <string name="trim_track_title">Редактирование трека</string>
     <string name="trim_track_hint">Смахните участок трека в сторону, чтобы удалить</string>
+    <string name="trim_remove_all_passive">Удалить все участки без активности</string>
+    <string name="trim_pause">Пауза · %1$s</string>
+    <string name="trim_compact_range">%1$s–%2$s · %3$s</string>
+    <string name="trim_compact_start">Старт · %1$s</string>
+    <string name="trim_compact_finish">%1$s · Финиш</string>
+    <string name="trim_duration_seconds">%1$d сек</string>
     <string name="undo_last_trim">Отменить последнее удаление</string>
     <string name="trim_start">Старт — %1$s</string>
     <string name="trim_finish">Финиш — %1$s · %2$s</string>
@@ -238,6 +244,9 @@
     <string name="discard_changes">Не сохранять</string>
     <string name="trim_track_unavailable">Для обрезки нужны координаты с корректным временем записи</string>
     <string name="trim_analysis_failed">Не удалось проанализировать трек: %1$s</string>
+    <string name="trim_analysis_in_progress">Анализируем участки трека…</string>
+    <string name="trim_preview_title">Участок трека</string>
+    <string name="trim_preview_summary">%1$s–%2$s · %3$s</string>
     <string name="trim_save_failed">Не удалось сохранить изменения: %1$s</string>
     <string name="track_trimmed">Трек обрезан и обновлён на карте</string>
 </resources>

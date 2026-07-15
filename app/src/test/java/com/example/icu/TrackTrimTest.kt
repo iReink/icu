@@ -31,6 +31,16 @@ class TrackTrimTest {
     }
 
     @Test
+    fun movementAtTrackBoundaryIsNotMisclassifiedAsPause() {
+        val points = (0..20).map { second -> point(second * 1.2, second) }
+
+        val sections = TrackTrimAnalyzer.analyze(points, TrackType.WALK)
+
+        assertTrue(sections.first().kind.isActive)
+        assertEquals(0, sections.first().startIndex)
+    }
+
+    @Test
     fun shortPauseIsMergedButLongPauseRemains() {
         val shortPause = walkingTrackWithPause(pauseSeconds = 30)
         val longPause = walkingTrackWithPause(pauseSeconds = 120)
@@ -97,6 +107,46 @@ class TrackTrimTest {
 
         assertEquals(points, model.buildPoints())
         assertFalse(model.hasChanges)
+    }
+
+    @Test
+    fun deleteAllPassiveIsOneUndoableOperation() {
+        val points = (0..11).map { index -> point(index * 2.0, index) }
+        val model = TrackTrimEditorModel(
+            points,
+            listOf(
+                AnalyzedTrackSection(0, 0, 2, TrackMotionKind.ACTIVE),
+                AnalyzedTrackSection(1, 3, 4, TrackMotionKind.PASSIVE),
+                AnalyzedTrackSection(2, 5, 7, TrackMotionKind.ACTIVE),
+                AnalyzedTrackSection(3, 8, 9, TrackMotionKind.PASSIVE),
+                AnalyzedTrackSection(4, 10, 11, TrackMotionKind.ACTIVE)
+            )
+        )
+
+        model.deleteAllPassive()
+
+        assertFalse(model.hasPassiveSections)
+        assertEquals(8, model.buildPoints().size)
+        model.undo()
+        assertEquals(points, model.buildPoints())
+        assertTrue(model.hasPassiveSections)
+    }
+
+    @Test
+    fun previewContainsOnlySelectedSectionPoints() {
+        val points = (0..7).map { index -> point(index * 2.0, index) }
+        val model = TrackTrimEditorModel(
+            points,
+            listOf(
+                AnalyzedTrackSection(0, 0, 2, TrackMotionKind.ACTIVE),
+                AnalyzedTrackSection(1, 3, 4, TrackMotionKind.PASSIVE),
+                AnalyzedTrackSection(2, 5, 7, TrackMotionKind.ACTIVE)
+            )
+        )
+
+        val preview = model.pointsForDisplaySection("1")
+
+        assertEquals(points.subList(3, 5), preview)
     }
 
     @Test
