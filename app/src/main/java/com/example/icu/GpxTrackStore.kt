@@ -10,6 +10,8 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlin.math.roundToInt
 
 class GpxTrackStore(private val context: Context) {
@@ -64,6 +66,41 @@ class GpxTrackStore(private val context: Context) {
         return updated
     }
 
+    fun replaceTrackPoints(track: RecordedTrack, points: List<TrackPoint>): RecordedTrack {
+        require(points.size >= 2) { "Track must contain at least two points" }
+        val normalizedPoints = points.mapIndexed { index, point ->
+            if (index == 0) point.copy(startsNewSegment = false) else point
+        }
+        val updated = track.copy(
+            points = normalizedPoints,
+            distanceMeters = calculateDistance(normalizedPoints),
+            durationMillis = calculateDuration(normalizedPoints),
+            startedAtMillis = normalizedPoints.first().timeMillis
+        )
+        val temporaryFile = File(track.file.parentFile, "${track.file.name}.tmp")
+        runCatching {
+            writeTrack(updated.copy(file = temporaryFile), temporaryFile)
+            runCatching {
+                Files.move(
+                    temporaryFile.toPath(),
+                    track.file.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            }.getOrElse {
+                Files.move(
+                    temporaryFile.toPath(),
+                    track.file.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            }
+        }.onFailure {
+            temporaryFile.delete()
+            throw it
+        }
+        return updated
+    }
+
     fun deleteTrack(track: RecordedTrack): Boolean {
         return track.file.delete()
     }
@@ -97,8 +134,8 @@ class GpxTrackStore(private val context: Context) {
         return track
     }
 
-    private fun writeTrack(track: RecordedTrack) {
-        track.file.outputStream().use { stream ->
+    private fun writeTrack(track: RecordedTrack, outputFile: File = track.file) {
+        outputFile.outputStream().use { stream ->
             val serializer = Xml.newSerializer()
             serializer.setOutput(stream, Charsets.UTF_8.name())
             serializer.startDocument(Charsets.UTF_8.name(), true)
@@ -129,22 +166,24 @@ class GpxTrackStore(private val context: Context) {
             serializer.endTag(null, "visible")
             serializer.endTag(null, "extensions")
 
-            serializer.startTag(null, "trkseg")
-            track.points.forEach { point ->
-                serializer.startTag(null, "trkpt")
-                serializer.attribute(null, "lat", point.latitude.toString())
-                serializer.attribute(null, "lon", point.longitude.toString())
-                point.altitude?.let { altitude ->
-                    serializer.startTag(null, "ele")
-                    serializer.text(altitude.toString())
-                    serializer.endTag(null, "ele")
+            track.points.connectedSegments().forEach { segment ->
+                serializer.startTag(null, "trkseg")
+                segment.forEach { point ->
+                    serializer.startTag(null, "trkpt")
+                    serializer.attribute(null, "lat", point.latitude.toString())
+                    serializer.attribute(null, "lon", point.longitude.toString())
+                    point.altitude?.let { altitude ->
+                        serializer.startTag(null, "ele")
+                        serializer.text(altitude.toString())
+                        serializer.endTag(null, "ele")
+                    }
+                    serializer.startTag(null, "time")
+                    serializer.text(formatInstant(point.timeMillis))
+                    serializer.endTag(null, "time")
+                    serializer.endTag(null, "trkpt")
                 }
-                serializer.startTag(null, "time")
-                serializer.text(formatInstant(point.timeMillis))
-                serializer.endTag(null, "time")
-                serializer.endTag(null, "trkpt")
+                serializer.endTag(null, "trkseg")
             }
-            serializer.endTag(null, "trkseg")
             serializer.endTag(null, "trk")
             serializer.endTag(null, "gpx")
             serializer.endDocument()
@@ -160,6 +199,7 @@ class GpxTrackStore(private val context: Context) {
             var visible = true
             var storedDistanceMeters: Float? = null
             val points = mutableListOf<TrackPoint>()
+            var nextPointStartsSegment = false
 
             while (parser.next() != XmlPullParser.END_DOCUMENT) {
                 if (parser.eventType != XmlPullParser.START_TAG) continue
@@ -169,7 +209,11 @@ class GpxTrackStore(private val context: Context) {
                     "type" -> type = TrackType.fromGpxType(parser.readText())
                     "visible" -> visible = parser.readText().toBooleanStrictOrNull() ?: true
                     "distanceMeters" -> storedDistanceMeters = parser.readText().toFloatOrNull()
-                    "trkpt" -> parseTrackPoint(parser)?.let { points.add(it) }
+                    "trkseg" -> nextPointStartsSegment = points.isNotEmpty()
+                    "trkpt" -> parseTrackPoint(parser)?.let { point ->
+                        points.add(point.copy(startsNewSegment = nextPointStartsSegment))
+                        nextPointStartsSegment = false
+                    }
                 }
             }
 
@@ -233,10 +277,8 @@ class GpxTrackStore(private val context: Context) {
         fun calculateDistance(points: List<TrackPoint>): Float {
             var distanceMeters = 0f
             points.zipWithNext { previous, current ->
-                val segmentDistanceMeters = TrackRecordingService.segmentDistanceMeters(previous, current)
-                if (TrackRecordingService.isMeaningfulMovement(previous, current, segmentDistanceMeters)) {
-                    distanceMeters += segmentDistanceMeters
-                }
+                if (current.startsNewSegment) return@zipWithNext
+                distanceMeters += TrackGeometry.meaningfulDistanceMeters(previous, current)
             }
             return distanceMeters
         }

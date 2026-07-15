@@ -224,4 +224,20 @@
     <string name="unsaved_measurement_message">Вы добавили несколько точек. Если выйти сейчас, ручной маршрут не сохранится.</string>
     <string name="discard_route">Выйти без сохранения</string>
     <string name="return_to_route">Вернуться и сохранить</string>
+    <string name="trim_track_action">Обрезать</string>
+    <string name="trim_track_title">Редактирование трека</string>
+    <string name="trim_track_hint">Смахните участок трека в сторону, чтобы удалить</string>
+    <string name="undo_last_trim">Отменить последнее удаление</string>
+    <string name="trim_start">Старт — %1$s</string>
+    <string name="trim_finish">Финиш — %1$s · %2$s</string>
+    <string name="trim_duration_hours">%1$d ч %2$d мин</string>
+    <string name="trim_duration_minutes">%1$d мин</string>
+    <string name="trim_summary">%1$s · %2$s</string>
+    <string name="trim_discard_title">Не сохранять изменения?</string>
+    <string name="trim_discard_message">Удалённые участки вернутся, а исходный трек останется без изменений.</string>
+    <string name="discard_changes">Не сохранять</string>
+    <string name="trim_track_unavailable">Для обрезки нужны координаты с корректным временем записи</string>
+    <string name="trim_analysis_failed">Не удалось проанализировать трек: %1$s</string>
+    <string name="trim_save_failed">Не удалось сохранить изменения: %1$s</string>
+    <string name="track_trimmed">Трек обрезан и обновлён на карте</string>
 </resources>

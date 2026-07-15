@@ -158,6 +158,7 @@ object GpxExchange {
         var visible = true
         var distanceMeters: Float? = null
         val points = mutableListOf<TrackPoint>()
+        var nextPointStartsSegment = false
         while (parser.next() != XmlPullParser.END_DOCUMENT) {
             if (parser.eventType == XmlPullParser.END_TAG && parser.name == "trk") break
             if (parser.eventType != XmlPullParser.START_TAG) continue
@@ -166,7 +167,11 @@ object GpxExchange {
                 "type" -> type = TrackType.entries.firstOrNull { it.gpxType == parser.readTextSafely() }
                 "visible" -> visible = parser.readTextSafely().toBooleanStrictOrNull() ?: true
                 "distanceMeters" -> distanceMeters = parser.readTextSafely().toFloatOrNull()
-                "trkpt" -> parseTrackPoint(parser)?.let(points::add)
+                "trkseg" -> nextPointStartsSegment = points.isNotEmpty()
+                "trkpt" -> parseTrackPoint(parser)?.let { point ->
+                    points.add(point.copy(startsNewSegment = nextPointStartsSegment))
+                    nextPointStartsSegment = false
+                }
             }
         }
         if (points.isEmpty()) return null

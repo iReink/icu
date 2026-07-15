@@ -1538,21 +1538,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun addSavedTrackOverlay(track: RecordedTrack, isFocused: Boolean, isDimmed: Boolean) {
-        if (track.points.size == 1) {
-            val marker = createSinglePointTrackMarker(track, isFocused, isDimmed)
-            savedTrackOverlays.add(marker)
-            map.overlays.add(marker)
-        } else {
-            if (isFocused) {
-                val halo = createFocusedTrackHalo(track)
-                halo.setPoints(track.points.map { it.toGeoPoint() })
-                savedTrackOverlays.add(halo)
-                map.overlays.add(halo)
+        track.points.connectedSegments().forEach { segment ->
+            if (segment.size == 1) {
+                val marker = createSinglePointTrackMarker(track, segment.first(), isFocused, isDimmed)
+                savedTrackOverlays.add(marker)
+                map.overlays.add(marker)
+            } else {
+                if (isFocused) {
+                    val halo = createFocusedTrackHalo(track)
+                    halo.setPoints(segment.map { it.toGeoPoint() })
+                    savedTrackOverlays.add(halo)
+                    map.overlays.add(halo)
+                }
+                val polyline = createSavedTrackPolyline(track, isFocused, isDimmed)
+                polyline.setPoints(segment.map { it.toGeoPoint() })
+                savedTrackOverlays.add(polyline)
+                map.overlays.add(polyline)
             }
-            val polyline = createSavedTrackPolyline(track, isFocused, isDimmed)
-            polyline.setPoints(track.points.map { it.toGeoPoint() })
-            savedTrackOverlays.add(polyline)
-            map.overlays.add(polyline)
         }
     }
 
@@ -1600,9 +1602,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun createSinglePointTrackMarker(track: RecordedTrack, isFocused: Boolean, isDimmed: Boolean): Marker {
+    private fun createSinglePointTrackMarker(
+        track: RecordedTrack,
+        point: TrackPoint,
+        isFocused: Boolean,
+        isDimmed: Boolean
+    ): Marker {
         return Marker(map).apply {
-            position = track.points.first().toGeoPoint()
+            position = point.toGeoPoint()
             icon = BitmapDrawable(resources, createTrackPointIcon(track.type.color, isFocused, isDimmed))
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
             setOnMarkerClickListener { marker, _ ->
@@ -1649,20 +1656,22 @@ class MainActivity : AppCompatActivity() {
         if (points.isEmpty()) return null
 
         val tap = pointOnScreen(tapPoint)
-        if (points.size == 1) {
-            return distancePixels(tap, pointOnScreen(points.first().toGeoPoint()))
-        }
-
         var minDistance = Double.MAX_VALUE
-        points.zipWithNext { start, end ->
-            val distance = distanceToSegmentPixels(
-                tap = tap,
-                start = pointOnScreen(start.toGeoPoint()),
-                end = pointOnScreen(end.toGeoPoint())
-            )
-            minDistance = min(minDistance, distance)
+        points.connectedSegments().forEach { segment ->
+            if (segment.size == 1) {
+                minDistance = min(minDistance, distancePixels(tap, pointOnScreen(segment.first().toGeoPoint())))
+            } else {
+                segment.zipWithNext { start, end ->
+                    val distance = distanceToSegmentPixels(
+                        tap = tap,
+                        start = pointOnScreen(start.toGeoPoint()),
+                        end = pointOnScreen(end.toGeoPoint())
+                    )
+                    minDistance = min(minDistance, distance)
+                }
+            }
         }
-        return minDistance
+        return minDistance.takeUnless { it == Double.MAX_VALUE }
     }
 
     private fun pointOnScreen(point: GeoPoint): Point {
@@ -5269,6 +5278,8 @@ class MainActivity : AppCompatActivity() {
             menu.add(0, TRACK_ACTION_RENAME, 0, R.string.rename)
             if (track.type == TrackType.CUSTOM) {
                 menu.add(0, TRACK_ACTION_EDIT, 1, R.string.edit)
+            } else {
+                menu.add(0, TRACK_ACTION_TRIM, 1, R.string.trim_track_action)
             }
             menu.add(
                 0,
@@ -5283,6 +5294,7 @@ class MainActivity : AppCompatActivity() {
                 when (item.itemId) {
                     TRACK_ACTION_RENAME -> showRenameDialog(track, refreshScreen)
                     TRACK_ACTION_EDIT -> editManualTrack(track)
+                    TRACK_ACTION_TRIM -> showTrackTrimEditor(track, refreshScreen)
                     TRACK_ACTION_VISIBILITY -> {
                         if (focusedTrackFileName == track.file.name) clearTrackFocus()
                         val updated = trackStore.setTrackVisibility(track, !track.visible)
@@ -5306,6 +5318,42 @@ class MainActivity : AppCompatActivity() {
         hideSection()
         bottomNavigation.selectedItemId = R.id.navMap
         enterMeasurementMode(track)
+    }
+
+    private fun showTrackTrimEditor(track: RecordedTrack, refreshScreen: Boolean) {
+        if (track.type == TrackType.CUSTOM) return
+        if (!TrackTrimAnalyzer.canAnalyze(track.points)) {
+            showSnackbar(getString(R.string.trim_track_unavailable), isLong = true)
+            return
+        }
+        backgroundExecutor.execute {
+            val analysis = runCatching { TrackTrimAnalyzer.analyze(track.points, track.type) }
+            runOnUiThread {
+                analysis.onSuccess { sections ->
+                    val model = TrackTrimEditorModel(track.points, sections)
+                    TrackTrimBottomSheet(this, model) { points, completion ->
+                        backgroundExecutor.execute {
+                            val saveResult = runCatching { trackStore.replaceTrackPoints(track, points) }
+                            runOnUiThread {
+                                saveResult.onSuccess { updated ->
+                                    replaceCachedTrack(updated)
+                                    applySavedTrackOverlays(savedTracksForMap())
+                                    skippedTrackRefreshes = 2
+                                    syncTracksSilently()
+                                    if (refreshScreen) showTracksScreen()
+                                    showSnackbar(getString(R.string.track_trimmed))
+                                }.onFailure { error ->
+                                    showSnackbar(getString(R.string.trim_save_failed, userMessage(error)), isLong = true)
+                                }
+                                completion(saveResult)
+                            }
+                        }
+                    }.show()
+                }.onFailure { error ->
+                    showSnackbar(getString(R.string.trim_analysis_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
     }
 
     private fun showRenameDialog(track: RecordedTrack, refreshScreen: Boolean = true) {
@@ -5619,7 +5667,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun trackFingerprint(type: TrackType, points: List<TrackPoint>, distanceMeters: Float): String {
         val pointHash = points.joinToString("|") { point ->
-            String.format(Locale.US, "%.5f,%.5f,%d", point.latitude, point.longitude, point.timeMillis / 1000L)
+            String.format(
+                Locale.US,
+                "%.5f,%.5f,%d,%b",
+                point.latitude,
+                point.longitude,
+                point.timeMillis / 1000L,
+                point.startsNewSegment
+            )
         }.hashCode()
         val first = points.firstOrNull()?.timeMillis ?: 0L
         val last = points.lastOrNull()?.timeMillis ?: 0L
@@ -7083,6 +7138,7 @@ class MainActivity : AppCompatActivity() {
         private const val PROFILE_ACTION_SIGN_OUT = 13
         private const val POINT_ACTION_SHARE = 14
         private const val TRACK_ACTION_EDIT = 15
+        private const val TRACK_ACTION_TRIM = 20
         private const val POINT_SHARE_GPX_ICU = 16
         private const val POINT_SHARE_YANDEX = 17
         private const val POINT_SHARE_2GIS = 18
