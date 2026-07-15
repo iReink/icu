@@ -11,10 +11,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Point
 import android.graphics.Rect
 import android.graphics.RectF
@@ -5342,7 +5344,9 @@ class MainActivity : AppCompatActivity() {
                     TrackTrimBottomSheet(
                         activity = this,
                         model = model,
-                        onPreview = { points, section -> showTrackSectionPreview(points, section, track.type) }
+                        onPreview = { points, section, onDelete ->
+                            showTrackSectionPreview(points, section, track.type, onDelete)
+                        }
                     ) { points, completion ->
                         backgroundExecutor.execute {
                             val saveResult = runCatching { trackStore.replaceTrackPoints(track, points) }
@@ -5424,7 +5428,8 @@ class MainActivity : AppCompatActivity() {
     private fun showTrackSectionPreview(
         points: List<TrackPoint>,
         section: TrackTrimDisplaySection,
-        type: TrackType
+        type: TrackType,
+        onDelete: () -> Unit
     ) {
         if (points.isEmpty()) return
         val previewMap = MapView(this).apply {
@@ -5433,7 +5438,7 @@ class MainActivity : AppCompatActivity() {
                 MapSourceId.GEOAPIFY -> geoapifyTileSource
             })
             zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-            setMultiTouchControls(false)
+            setMultiTouchControls(true)
             isTilesScaledToDpi = true
         }
         val routeColor = when (type) {
@@ -5459,6 +5464,36 @@ class MainActivity : AppCompatActivity() {
                 setPoints(geoPoints)
             })
         }
+        if (section.isActive) {
+            createTrackDirectionArrow(points, routeColor)?.let { arrow ->
+                previewMap.overlays.add(Marker(previewMap).apply {
+                    position = GeoPoint(points.last().latitude, points.last().longitude)
+                    icon = arrow
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    setOnMarkerClickListener { _, _ -> true }
+                })
+            }
+        }
+        val mapHost = FrameLayout(this).apply {
+            addView(previewMap, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            ))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(previewZoomButton("+", getString(R.string.zoom_in)) {
+                    previewMap.controller.zoomIn()
+                })
+                addView(previewZoomButton("−", getString(R.string.zoom_out)) {
+                    previewMap.controller.zoomOut()
+                }, LinearLayout.LayoutParams(dp(42), dp(42)).apply { topMargin = dp(6) })
+            }, FrameLayout.LayoutParams(
+                dp(42),
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.CENTER_VERTICAL
+            ).apply { marginEnd = dp(12) })
+        }
+        lateinit var deleteButton: MaterialButton
         val card = MaterialCardView(this).apply {
             radius = dp(24).toFloat()
             cardElevation = dp(10).toFloat()
@@ -5468,31 +5503,55 @@ class MainActivity : AppCompatActivity() {
             isClickable = true
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                addView(previewMap, LinearLayout.LayoutParams(
+                addView(mapHost, LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     0,
                     1f
                 ))
                 addView(LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.VERTICAL
+                    orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(dp(18), dp(10), dp(18), dp(10))
-                    addView(TextView(this@MainActivity).apply {
-                        text = getString(R.string.trim_preview_title)
-                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
-                        textSize = 16f
-                        typeface = Typeface.DEFAULT_BOLD
-                    })
-                    addView(TextView(this@MainActivity).apply {
-                        text = getString(
-                            R.string.trim_preview_summary,
-                            TRIM_PREVIEW_TIME_FORMATTER.format(Instant.ofEpochMilli(section.startTimeMillis)),
-                            TRIM_PREVIEW_TIME_FORMATTER.format(Instant.ofEpochMilli(section.endTimeMillis)),
-                            formatDistance(section.endDistanceMeters - section.startDistanceMeters)
-                        )
-                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
-                        textSize = 13f
-                    })
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        addView(TextView(this@MainActivity).apply {
+                            text = getString(R.string.trim_preview_title)
+                            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                            textSize = 16f
+                            typeface = Typeface.DEFAULT_BOLD
+                        })
+                        addView(TextView(this@MainActivity).apply {
+                            text = getString(
+                                R.string.trim_preview_summary,
+                                TRIM_PREVIEW_TIME_FORMATTER.format(Instant.ofEpochMilli(section.startTimeMillis)),
+                                TRIM_PREVIEW_TIME_FORMATTER.format(Instant.ofEpochMilli(section.endTimeMillis)),
+                                formatDistance(section.endDistanceMeters - section.startDistanceMeters)
+                            )
+                            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                            textSize = 13f
+                        })
+                    }, LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f
+                    ))
+                    deleteButton = MaterialButton(this@MainActivity).apply {
+                        icon = ContextCompat.getDrawable(this@MainActivity, R.drawable.ic_delete)
+                        iconTint = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_danger)
+                        iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START
+                        iconPadding = 0
+                        text = ""
+                        contentDescription = getString(R.string.trim_preview_delete)
+                        backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
+                        insetTop = 0
+                        insetBottom = 0
+                        minWidth = 0
+                        minHeight = 0
+                        setPadding(dp(12), dp(12), dp(12), dp(12))
+                        elevation = 0f
+                        stateListAnimator = null
+                    }
+                    addView(deleteButton, LinearLayout.LayoutParams(dp(48), dp(48)))
                 }, LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     dp(72)
@@ -5543,8 +5602,75 @@ class MainActivity : AppCompatActivity() {
                 previewMap.onDetach()
             }
         }
+        deleteButton.setOnClickListener {
+            dialog.dismiss()
+            onDelete()
+        }
         previewRoot.setOnClickListener { dialog.dismiss() }
         dialog.show()
+    }
+
+    private fun previewZoomButton(
+        label: String,
+        description: String,
+        onClick: () -> Unit
+    ): MaterialButton {
+        return MaterialButton(this).apply {
+            text = label
+            contentDescription = description
+            isAllCaps = false
+            textSize = 22f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+            backgroundTintList = ColorStateList.valueOf(Color.WHITE)
+            insetTop = 0
+            insetBottom = 0
+            minWidth = 0
+            minHeight = 0
+            cornerRadius = dp(21)
+            elevation = dp(3).toFloat()
+            stateListAnimator = null
+            setPadding(0, 0, 0, 0)
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(dp(42), dp(42))
+        }
+    }
+
+    private fun createTrackDirectionArrow(points: List<TrackPoint>, color: Int): BitmapDrawable? {
+        val finalSegment = points.connectedSegments().lastOrNull() ?: return null
+        val last = finalSegment.lastOrNull() ?: return null
+        val previous = finalSegment.asReversed().drop(1).firstOrNull {
+            TrackGeometry.distanceMeters(it, last) >= MIN_PREVIEW_DIRECTION_DISTANCE_METERS
+        } ?: return null
+        val from = Location("trim-preview").apply {
+            latitude = previous.latitude
+            longitude = previous.longitude
+        }
+        val to = Location("trim-preview").apply {
+            latitude = last.latitude
+            longitude = last.longitude
+        }
+        val size = dp(30).coerceAtLeast(30)
+        val center = size / 2f
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.rotate(from.bearingTo(to), center, center)
+
+        fun arrowPath(inset: Float): Path = Path().apply {
+            moveTo(center, inset)
+            lineTo(size - inset, size - inset)
+            lineTo(center, size * 0.70f)
+            lineTo(inset, size - inset)
+            close()
+        }
+        canvas.drawPath(arrowPath(dp(1).toFloat()), Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            this.color = Color.WHITE
+        })
+        canvas.drawPath(arrowPath(dp(5).toFloat()), Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            this.color = color
+        })
+        return BitmapDrawable(resources, bitmap)
     }
 
     private fun showRenameDialog(track: RecordedTrack, refreshScreen: Boolean = true) {
@@ -7342,6 +7468,7 @@ class MainActivity : AppCompatActivity() {
         private const val TRACK_DIM_ALPHA = 90
         private const val TRACK_FOCUS_VIEW_PADDING_DP = 56
         private const val TRACK_FOCUS_TOOLTIP_DELAY_MS = 420L
+        private const val MIN_PREVIEW_DIRECTION_DISTANCE_METERS = 3f
         private const val AUTO_TRACK_FOCUS_MS = 10_000L
         private const val TIMER_INTERVAL_MS = 1_000L
         private const val FRIEND_HIGHLIGHT_DURATION_MS = 3_500L

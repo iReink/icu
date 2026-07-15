@@ -35,7 +35,7 @@ import kotlin.math.roundToInt
 class TrackTrimBottomSheet(
     private val activity: AppCompatActivity,
     private val model: TrackTrimEditorModel,
-    private val onPreview: (List<TrackPoint>, TrackTrimDisplaySection) -> Unit,
+    private val onPreview: (List<TrackPoint>, TrackTrimDisplaySection, () -> Unit) -> Unit,
     private val onSave: (List<TrackPoint>, (Result<RecordedTrack>) -> Unit) -> Unit
 ) {
     private val dialog = BottomSheetDialog(activity)
@@ -60,6 +60,7 @@ class TrackTrimBottomSheet(
         dialog.setOnShowListener {
             val sheet = dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
             sheet?.let {
+                it.setBackgroundColor(ContextCompat.getColor(activity, R.color.icu_screen_surface))
                 it.layoutParams.height = ViewGroup.LayoutParams.MATCH_PARENT
                 BottomSheetBehavior.from(it).apply {
                     isFitToContents = false
@@ -77,28 +78,53 @@ class TrackTrimBottomSheet(
     private fun buildContent(): View {
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(10), dp(20), dp(20))
-            background = ContextCompat.getDrawable(activity, R.drawable.bg_bottom_sheet)
-            minimumHeight = activity.resources.displayMetrics.heightPixels
+            setBackgroundColor(ContextCompat.getColor(activity, R.color.icu_screen_surface))
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         }
-        root.addView(View(activity).apply {
-            background = ContextCompat.getDrawable(activity, R.drawable.bg_sheet_handle)
-            layoutParams = LinearLayout.LayoutParams(dp(44), dp(5)).apply {
-                gravity = Gravity.CENTER_HORIZONTAL
-                bottomMargin = dp(28)
-            }
-        })
-        root.addView(TextView(activity).apply {
-            text = activity.getString(R.string.trim_track_title)
-            setTextColor(Color.BLACK)
-            textSize = 28f
-            typeface = Typeface.DEFAULT_BOLD
-        })
-        root.addView(TextView(activity).apply {
+        root.addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(8), dp(20), 0)
+            addView(MaterialButton(activity).apply {
+                icon = ContextCompat.getDrawable(activity, R.drawable.ic_arrow_back)
+                iconTint = ColorStateList.valueOf(Color.BLACK)
+                iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START
+                iconPadding = 0
+                text = ""
+                contentDescription = activity.getString(R.string.back)
+                backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
+                insetTop = 0
+                insetBottom = 0
+                minWidth = 0
+                minHeight = 0
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+                elevation = 0f
+                stateListAnimator = null
+                setOnClickListener { requestDismiss() }
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(TextView(activity).apply {
+                text = activity.getString(R.string.trim_track_title)
+                setTextColor(Color.BLACK)
+                textSize = 28f
+                typeface = Typeface.DEFAULT_BOLD
+            }, LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f
+            ).apply { marginStart = dp(8) })
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(72)
+        ))
+
+        val content = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), 0, dp(20), dp(20))
+        }
+        content.addView(TextView(activity).apply {
             text = activity.getString(R.string.trim_track_hint)
             setTextColor(ContextCompat.getColor(activity, R.color.icu_text_secondary))
             textSize = 15f
@@ -144,19 +170,19 @@ class TrackTrimBottomSheet(
                 1f
             )
         }
-        root.addView(timelineCard)
+        content.addView(timelineCard)
 
         removePassiveButton = textActionButton(activity.getString(R.string.trim_remove_all_passive)) {
             model.deleteAllPassive()
             refresh()
         }
-        root.addView(removePassiveButton)
+        content.addView(removePassiveButton)
 
         undoButton = textActionButton(activity.getString(R.string.undo_last_trim)) {
             model.undo()
             refresh()
         }
-        root.addView(undoButton)
+        content.addView(undoButton)
 
         summaryText = TextView(activity).apply {
             setTextColor(ContextCompat.getColor(activity, R.color.icu_text_primary))
@@ -170,14 +196,19 @@ class TrackTrimBottomSheet(
                 bottomMargin = dp(12)
             }
         }
-        root.addView(summaryText)
+        content.addView(summaryText)
 
-        root.addView(LinearLayout(activity).apply {
+        content.addView(LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(outlinedButton(activity.getString(R.string.cancel)) { requestDismiss() })
             saveButton = filledButton(activity.getString(R.string.save)) { save() }
             addView(saveButton)
         })
+        root.addView(content, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        ))
 
         refresh()
         return root
@@ -328,7 +359,10 @@ class TrackTrimBottomSheet(
                 val points = model.pointsForDisplaySection(section.id)
                 if (points.isEmpty()) return@setOnLongClickListener false
                 it.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                onPreview(points, section)
+                onPreview(points, section) {
+                    model.delete(section.id)
+                    refresh()
+                }
                 true
             }
             val isShort = sectionHeight(position) <= dp(72) && sections.size > 1

@@ -66,7 +66,9 @@ object TrackTrimAnalyzer {
         val tinyActiveDurationMillis: Long,
         val tinyActiveDistanceMeters: Float,
         val fastAbsoluteSpeedMetersPerSecond: Double,
-        val fastMinDurationMillis: Long
+        val fastMinDurationMillis: Long,
+        val fastClusterGapMillis: Long,
+        val fastEdgeExtensionMillis: Long
     )
 
     private data class PointMotion(val active: Boolean, val speed: Double)
@@ -173,10 +175,15 @@ object TrackTrimAnalyzer {
             if (run.kind != TrackMotionKind.PASSIVE || duration(points, run) >= pauseThreshold) return@forEachIndexed
             val previous = runs.getOrNull(index - 1)?.kind?.takeIf { it.isActive }
             val next = runs.getOrNull(index + 1)?.kind?.takeIf { it.isActive }
-            if (previous != null && next != null) {
-                fill(pointKinds, run, if (previous == next) previous else TrackMotionKind.ACTIVE)
+            when {
+                previous != null && next != null ->
+                    fill(pointKinds, run, if (previous == next) previous else TrackMotionKind.ACTIVE)
+                previous != null -> fill(pointKinds, run, previous)
+                next != null -> fill(pointKinds, run, next)
             }
         }
+
+        coalesceFastMovement(points, pointKinds, config)
 
         return buildRuns(pointKinds).mapIndexed { id, run -> run.copy(id = id) }
     }
@@ -190,7 +197,9 @@ object TrackTrimAnalyzer {
             tinyActiveDurationMillis = 30_000L,
             tinyActiveDistanceMeters = 30f,
             fastAbsoluteSpeedMetersPerSecond = 3.0,
-            fastMinDurationMillis = 30_000L
+            fastMinDurationMillis = 30_000L,
+            fastClusterGapMillis = 3 * 60_000L,
+            fastEdgeExtensionMillis = 90_000L
         )
         TrackType.BIKE -> AnalysisConfig(
             windowMillis = 12_000L,
@@ -200,7 +209,9 @@ object TrackTrimAnalyzer {
             tinyActiveDurationMillis = 20_000L,
             tinyActiveDistanceMeters = 60f,
             fastAbsoluteSpeedMetersPerSecond = 12.0,
-            fastMinDurationMillis = 20_000L
+            fastMinDurationMillis = 20_000L,
+            fastClusterGapMillis = 2 * 60_000L,
+            fastEdgeExtensionMillis = 60_000L
         )
         TrackType.CUSTOM -> error("Manual tracks are not analyzed")
     }
@@ -232,6 +243,60 @@ object TrackTrimAnalyzer {
         for (index in run.startIndex..run.endIndex) kinds[index] = kind
     }
 
+    private fun coalesceFastMovement(
+        points: List<TrackPoint>,
+        kinds: MutableList<TrackMotionKind>,
+        config: AnalysisConfig
+    ) {
+        val runs = buildRuns(kinds)
+        val fastRunIndices = runs.indices.filter { runs[it].kind == TrackMotionKind.FAST }
+        if (fastRunIndices.isEmpty()) return
+
+        val clusters = mutableListOf<IntRange>()
+        var clusterStart = fastRunIndices.first()
+        var clusterEnd = clusterStart
+        fastRunIndices.drop(1).forEach { runIndex ->
+            val gap = points[runs[runIndex].startIndex].timeMillis -
+                points[runs[clusterEnd].endIndex].timeMillis
+            if (gap <= config.fastClusterGapMillis) {
+                clusterEnd = runIndex
+            } else {
+                clusters.add(clusterStart..clusterEnd)
+                clusterStart = runIndex
+                clusterEnd = runIndex
+            }
+        }
+        clusters.add(clusterStart..clusterEnd)
+
+        clusters.forEach { cluster ->
+            var firstRunIndex = cluster.first
+            var lastRunIndex = cluster.last
+            var leadingExtension = 0L
+            while (firstRunIndex > 0) {
+                val candidate = runs[firstRunIndex - 1]
+                val candidateDuration = duration(points, candidate)
+                if (candidateDuration > MAX_FAST_EDGE_RUN_MILLIS ||
+                    leadingExtension + candidateDuration > config.fastEdgeExtensionMillis
+                ) break
+                leadingExtension += candidateDuration
+                firstRunIndex--
+            }
+            var trailingExtension = 0L
+            while (lastRunIndex < runs.lastIndex) {
+                val candidate = runs[lastRunIndex + 1]
+                val candidateDuration = duration(points, candidate)
+                if (candidateDuration > MAX_FAST_EDGE_RUN_MILLIS ||
+                    trailingExtension + candidateDuration > config.fastEdgeExtensionMillis
+                ) break
+                trailingExtension += candidateDuration
+                lastRunIndex++
+            }
+            for (index in runs[firstRunIndex].startIndex..runs[lastRunIndex].endIndex) {
+                kinds[index] = TrackMotionKind.FAST
+            }
+        }
+    }
+
     private fun duration(points: List<TrackPoint>, run: AnalyzedTrackSection): Long {
         return (points[run.endIndex].timeMillis - points[run.startIndex].timeMillis).coerceAtLeast(0L)
     }
@@ -249,6 +314,7 @@ object TrackTrimAnalyzer {
     private const val MIN_DIRECTIONALITY = 0.25f
     private const val PAUSE_DURATION_RATIO = 0.02
     private const val BIKE_FAST_SPEED_MULTIPLIER = 2.2
+    private const val MAX_FAST_EDGE_RUN_MILLIS = 60_000L
 }
 
 class TrackTrimEditorModel(

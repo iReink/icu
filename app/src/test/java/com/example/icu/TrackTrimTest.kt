@@ -53,6 +53,21 @@ class TrackTrimTest {
     }
 
     @Test
+    fun shortPauseAtTrackEndMergesIntoMovement() {
+        val points = mutableListOf<TrackPoint>()
+        var east = 0.0
+        repeat(121) { second ->
+            points.add(point(east, second))
+            east += 1.2
+        }
+        repeat(10) { offset -> points.add(point(east, 121 + offset)) }
+
+        val sections = TrackTrimAnalyzer.analyze(points, TrackType.WALK)
+
+        assertTrue(sections.last().kind.isActive)
+    }
+
+    @Test
     fun deletingMiddlePauseCreatesSegmentBreakWithoutCompressingTime() {
         val points = (0..7).map { index -> point(index * 2.0, index) }
         val sections = listOf(
@@ -204,6 +219,32 @@ class TrackTrimTest {
         val sections = TrackTrimAnalyzer.analyze(points, TrackType.WALK)
 
         assertTrue(sections.any { it.kind == TrackMotionKind.FAST && sectionDuration(points, it) >= 30_000L })
+    }
+
+    @Test
+    fun carTurnsAndTrafficLightsRemainOneFastSection() {
+        val points = mutableListOf<TrackPoint>()
+        var east = 0.0
+        var second = 0
+        fun append(durationSeconds: Int, metersPerSecond: Double) {
+            repeat(durationSeconds) {
+                points.add(point(east, second++))
+                east += metersPerSecond
+            }
+        }
+        append(121, 1.2)
+        append(12, 2.0)
+        append(123, 10.0)
+        append(15, 0.0)
+        append(45, 10.0)
+        append(9, 2.0)
+        append(10, 0.0)
+
+        val sections = TrackTrimAnalyzer.analyze(points, TrackType.WALK)
+        val fastSections = sections.filter { it.kind == TrackMotionKind.FAST }
+
+        assertEquals(1, fastSections.size)
+        assertEquals(points.lastIndex, fastSections.single().endIndex)
     }
 
     @Test
