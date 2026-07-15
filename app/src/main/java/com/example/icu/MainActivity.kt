@@ -152,6 +152,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var syncManager: SupabaseSyncManager
     private lateinit var appLocationManager: LocationManager
     private lateinit var liveLocationUploader: LiveLocationUploader
+    private lateinit var publicLocationShareStore: PublicLocationShareStore
 
     private var locationOverlay: MyLocationNewOverlay? = null
     private var addTrackSheet: BottomSheetDialog? = null
@@ -188,6 +189,7 @@ class MainActivity : AppCompatActivity() {
     private var lastKnownUserLocation: Location? = null
     private var cachedUserProfile: UserProfile? = null
     private var cachedFriends: List<FriendProfile> = emptyList()
+    private var cachedPublicLocationShare: PublicLocationShare? = null
     private var cachedFriendLocations: Map<String, List<LocationSharePoint>> = emptyMap()
     private var lastProfileRefreshMillis = 0L
     private var friendLocationRefreshInFlight = false
@@ -346,6 +348,7 @@ class MainActivity : AppCompatActivity() {
         syncManager = SupabaseSyncManager(trackStore, savedPointStore, syncMetadataStore, supabaseClient)
         appLocationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         liveLocationUploader = LiveLocationUploader(this)
+        publicLocationShareStore = PublicLocationShareStore(this)
         setContentView(R.layout.activity_main)
         showStartupSplash()
 
@@ -4106,6 +4109,18 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        if (cachedPublicLocationShare == null) {
+            publicLocationShareStore.load(session.userId)
+                ?.takeIf { it.expiresAtMillis == null || it.expiresAtMillis > System.currentTimeMillis() }
+                ?.let { stored ->
+                    cachedPublicLocationShare = PublicLocationShare(
+                        id = stored.shareId,
+                        createdAtMillis = stored.createdAtMillis,
+                        expiresAtMillis = stored.expiresAtMillis
+                    )
+                }
+        }
+
         val cachedProfile = cachedUserProfile
         if (cachedProfile != null) {
             renderProfileWithFriends(cachedProfile, cachedFriends)
@@ -4123,6 +4138,7 @@ class MainActivity : AppCompatActivity() {
             showFriendInvitePrivacyDialog()
         })
         sectionContent.addView(locationBroadcastRow())
+        sectionContent.addView(publicLocationShareRow(cachedPublicLocationShare))
         sectionContent.addView(emptyStateText(getString(R.string.loading)))
         loadProfileAndFriends(force = true, showErrors = true)
     }
@@ -4138,12 +4154,25 @@ class MainActivity : AppCompatActivity() {
         backgroundExecutor.execute {
             runCatching {
                 val activeSession = supabaseClient.activeSession()
-                supabaseClient.fetchMyProfile(activeSession) to supabaseClient.fetchFriends(activeSession)
-            }.onSuccess { (profile, friends) ->
+                val publicShareResult = runCatching {
+                    supabaseClient.fetchCurrentPublicLocationShare(activeSession)
+                }
+                Triple(
+                    supabaseClient.fetchMyProfile(activeSession),
+                    supabaseClient.fetchFriends(activeSession),
+                    publicShareResult
+                )
+            }.onSuccess { (profile, friends, publicShareResult) ->
                 runOnUiThread {
                     profileRefreshInFlight = false
                     cachedUserProfile = profile
                     cachedFriends = friends
+                    if (publicShareResult.isSuccess) {
+                        cachedPublicLocationShare = publicShareResult.getOrNull()
+                        if (cachedPublicLocationShare == null) {
+                            publicLocationShareStore.clear(session.userId)
+                        }
+                    }
                     lastProfileRefreshMillis = System.currentTimeMillis()
                     if (currentSection == Section.PROFILE) {
                         renderProfileWithFriends(profile, friends)
@@ -4176,6 +4205,7 @@ class MainActivity : AppCompatActivity() {
             showFriendInvitePrivacyDialog()
         })
         sectionContent.addView(locationBroadcastRow())
+        sectionContent.addView(publicLocationShareRow(cachedPublicLocationShare))
         if (friends.isEmpty()) {
             sectionContent.addView(emptyStateView(
                 title = getString(R.string.empty_friends_title),
@@ -4201,6 +4231,7 @@ class MainActivity : AppCompatActivity() {
         sessionStore.clear()
         cachedUserProfile = null
         cachedFriends = emptyList()
+        cachedPublicLocationShare = null
         cachedFriendLocations = emptyMap()
         lastProfileRefreshMillis = 0L
         clearFriendLocationOverlays()
@@ -4214,6 +4245,7 @@ class MainActivity : AppCompatActivity() {
     private fun invalidateProfileCache() {
         cachedUserProfile = null
         cachedFriends = emptyList()
+        cachedPublicLocationShare = null
         lastProfileRefreshMillis = 0L
     }
 
@@ -4428,6 +4460,328 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.location_broadcast_8_hours) to 8 * 60 * 60_000L,
             getString(R.string.location_broadcast_until_manual_option) to null
         )
+    }
+
+    private fun publicLocationShareRow(share: PublicLocationShare?): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.bg_track_cell)
+            setPadding(dp(14), dp(10), dp(10), dp(10))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                if (share != null &&
+                    (share.expiresAtMillis == null || share.expiresAtMillis > System.currentTimeMillis())
+                ) {
+                    showPublicLocationShareActions(share)
+                } else {
+                    showPublicLocationShareDurationSheet()
+                }
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(12) }
+
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(TextView(this@MainActivity).apply {
+                    text = getString(R.string.public_location_share_title)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                    textSize = 16f
+                    typeface = Typeface.DEFAULT_BOLD
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = publicLocationShareCaption(share)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                    textSize = 13f
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(2) }
+                })
+            })
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ic_share)
+                imageTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.icu_purple_ink)
+                contentDescription = getString(R.string.public_location_share_title)
+                setPadding(dp(9), dp(9), dp(9), dp(9))
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+            })
+        }
+    }
+
+    private fun publicLocationShareCaption(share: PublicLocationShare?): String {
+        if (share == null) return getString(R.string.public_location_share_inactive)
+        val expiresAt = share.expiresAtMillis
+            ?: return getString(R.string.public_location_share_active_manual)
+        val remaining = (expiresAt - System.currentTimeMillis()).coerceAtLeast(0L)
+        return getString(
+            R.string.public_location_share_active_time,
+            LocationBroadcastService.formatRemainingTime(remaining)
+        )
+    }
+
+    private fun publicLocationShareOptions(): List<Pair<String, Int?>> {
+        return listOf(
+            getString(R.string.location_broadcast_15_minutes) to 15 * 60,
+            getString(R.string.location_broadcast_1_hour) to 60 * 60,
+            getString(R.string.location_broadcast_4_hours) to 4 * 60 * 60,
+            getString(R.string.location_broadcast_8_hours) to 8 * 60 * 60,
+            getString(R.string.public_location_share_24_hours) to 24 * 60 * 60,
+            getString(R.string.location_broadcast_until_manual_option) to null
+        )
+    }
+
+    private fun showPublicLocationShareDurationSheet() {
+        val sheet = BottomSheetDialog(this)
+        val options = publicLocationShareOptions()
+        var selectedDurationSeconds = options.first().second
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_bottom_sheet)
+            setPadding(dp(20), dp(14), dp(20), dp(28))
+            addView(View(this@MainActivity).apply {
+                setBackgroundResource(R.drawable.bg_sheet_handle)
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(6)).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    bottomMargin = dp(30)
+                }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.public_location_share_sheet_title)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 28f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(8) }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.public_location_share_explanation)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(14) }
+            })
+            val radioGroup = RadioGroup(this@MainActivity).apply {
+                orientation = RadioGroup.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(18) }
+            }
+            options.forEachIndexed { index, option ->
+                val radio = MaterialRadioButton(this@MainActivity).apply {
+                    id = View.generateViewId()
+                    text = option.first
+                    textSize = 16f
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_primary))
+                    gravity = Gravity.CENTER_VERTICAL
+                    minHeight = dp(48)
+                    layoutParams = RadioGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48))
+                }
+                radioGroup.addView(radio)
+                if (index == 0) radioGroup.check(radio.id)
+            }
+            radioGroup.setOnCheckedChangeListener { group, checkedId ->
+                val checkedIndex = (0 until group.childCount).indexOfFirst { group.getChildAt(it).id == checkedId }
+                selectedDurationSeconds = options.getOrNull(checkedIndex)?.second
+            }
+            addView(radioGroup)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = getString(R.string.cancel)
+                    isAllCaps = false
+                    backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+                    setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_purple_ink))
+                    elevation = 0f
+                    stateListAnimator = null
+                    setOnClickListener { sheet.dismiss() }
+                    layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) }
+                })
+                addView(MaterialButton(this@MainActivity).apply {
+                    text = getString(R.string.public_location_share_create)
+                    applyPrimaryFilledButton(heightDp = 36)
+                    setOnClickListener {
+                        sheet.dismiss()
+                        createPublicLocationShare(selectedDurationSeconds)
+                    }
+                    layoutParams = LinearLayout.LayoutParams(0, dp(36), 1f)
+                })
+            })
+        }
+        sheet.setContentView(content)
+        sheet.setOnShowListener { dialog ->
+            (dialog as BottomSheetDialog)
+                .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+                ?.background = ColorDrawable(Color.TRANSPARENT)
+        }
+        sheet.show()
+    }
+
+    private fun createPublicLocationShare(durationSeconds: Int?) {
+        val session = sessionStore.current() ?: run {
+            showSnackbar(getString(R.string.sign_in_for_sync), isLong = true)
+            return
+        }
+        val token = PublicLocationShareStore.newToken()
+        val tokenHash = PublicLocationShareStore.tokenHash(token)
+        backgroundExecutor.execute {
+            runCatching {
+                val activeSession = supabaseClient.activeSession()
+                supabaseClient.createPublicLocationShare(activeSession, tokenHash, durationSeconds)
+            }.onSuccess { share ->
+                publicLocationShareStore.save(session.userId, share, token)
+                runOnUiThread {
+                    cachedPublicLocationShare = share
+                    if (currentSection == Section.PROFILE) {
+                        cachedUserProfile?.let { renderProfileWithFriends(it, cachedFriends) }
+                    }
+                    sharePublicLocationLink(publicLocationShareLink(token))
+                    showSnackbar(getString(R.string.public_location_share_created), isLong = true)
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.public_location_share_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun showPublicLocationShareActions(share: PublicLocationShare) {
+        val session = sessionStore.current() ?: return
+        val stored = publicLocationShareStore.load(session.userId)?.takeIf { it.shareId == share.id }
+        val sheet = BottomSheetDialog(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_bottom_sheet)
+            setPadding(dp(20), dp(14), dp(20), dp(28))
+            addView(View(this@MainActivity).apply {
+                setBackgroundResource(R.drawable.bg_sheet_handle)
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(6)).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    bottomMargin = dp(30)
+                }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.public_location_share_active_title)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.black))
+                textSize = 26f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = if (stored == null) {
+                    getString(R.string.public_location_share_other_device)
+                } else {
+                    publicLocationShareCaption(share)
+                }
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.icu_text_secondary))
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(14) }
+            })
+            if (stored != null) {
+                addView(publicShareActionButton(getString(R.string.share)) {
+                    sheet.dismiss()
+                    sharePublicLocationLink(publicLocationShareLink(stored.token))
+                })
+                addView(publicShareActionButton(getString(R.string.copy_link)) {
+                    sheet.dismiss()
+                    copyPublicLocationLink(publicLocationShareLink(stored.token))
+                })
+            } else {
+                addView(publicShareActionButton(getString(R.string.public_location_share_replace)) {
+                    sheet.dismiss()
+                    showPublicLocationShareDurationSheet()
+                })
+            }
+            addView(publicShareActionButton(getString(R.string.public_location_share_revoke), destructive = true) {
+                sheet.dismiss()
+                confirmRevokePublicLocationShare(share)
+            })
+        }
+        sheet.setContentView(content)
+        sheet.setOnShowListener { dialog ->
+            (dialog as BottomSheetDialog)
+                .findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+                ?.background = ColorDrawable(Color.TRANSPARENT)
+        }
+        sheet.show()
+    }
+
+    private fun publicShareActionButton(textValue: String, destructive: Boolean = false, action: () -> Unit): View {
+        return MaterialButton(this).apply {
+            text = textValue
+            isAllCaps = false
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, android.R.color.transparent)
+            setTextColor(ContextCompat.getColor(this@MainActivity, if (destructive) R.color.icu_danger else R.color.icu_purple_ink))
+            elevation = 0f
+            stateListAnimator = null
+            setOnClickListener { action() }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48))
+        }
+    }
+
+    private fun confirmRevokePublicLocationShare(share: PublicLocationShare) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.public_location_share_revoke_title)
+            .setMessage(R.string.public_location_share_revoke_message)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.public_location_share_revoke) { _, _ -> revokePublicLocationShare(share) }
+            .show()
+    }
+
+    private fun revokePublicLocationShare(share: PublicLocationShare) {
+        val session = sessionStore.current() ?: return
+        backgroundExecutor.execute {
+            runCatching {
+                supabaseClient.revokePublicLocationShare(supabaseClient.activeSession(), share.id)
+            }.onSuccess {
+                publicLocationShareStore.clear(session.userId)
+                runOnUiThread {
+                    cachedPublicLocationShare = null
+                    if (currentSection == Section.PROFILE) {
+                        cachedUserProfile?.let { renderProfileWithFriends(it, cachedFriends) }
+                    }
+                    showSnackbar(getString(R.string.public_location_share_revoked))
+                }
+            }.onFailure { error ->
+                runOnUiThread {
+                    showSnackbar(getString(R.string.public_location_share_failed, userMessage(error)), isLong = true)
+                }
+            }
+        }
+    }
+
+    private fun publicLocationShareLink(token: String): String {
+        return "${SupabaseConfig.LIVE_SHARE_URL}#token=$token"
+    }
+
+    private fun sharePublicLocationLink(link: String) {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, getString(R.string.public_location_share_text, link))
+        }
+        startActivity(Intent.createChooser(intent, getString(R.string.public_location_share_title)))
+    }
+
+    private fun copyPublicLocationLink(link: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.public_location_share_title), link))
+        showSnackbar(getString(R.string.public_location_share_copied))
     }
 
     private fun statisticsEntryCard(): View {

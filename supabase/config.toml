@@ -1,0 +1,20 @@
+
+[functions.friend-invite]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/friend-invite/index.ts"
+
+[functions.point-share]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/point-share/index.ts"
+
+[functions.track-share]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/track-share/index.ts"
+
+[functions.live-share]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/live-share/index.ts"

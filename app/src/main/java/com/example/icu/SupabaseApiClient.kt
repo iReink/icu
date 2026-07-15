@@ -442,6 +442,49 @@ class SupabaseApiClient(
         )
     }
 
+    fun createPublicLocationShare(
+        session: SupabaseSession,
+        tokenHash: String,
+        durationSeconds: Int?
+    ): PublicLocationShare {
+        val body = JSONObject()
+            .put("share_token_hash", tokenHash)
+            .put("duration_seconds", durationSeconds ?: JSONObject.NULL)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        val response = request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/create_live_location_share",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = body
+        )
+        return parsePublicLocationShare(JSONArray(response.text).getJSONObject(0))
+    }
+
+    fun fetchCurrentPublicLocationShare(session: SupabaseSession): PublicLocationShare? {
+        val response = request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/current_live_location_share",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = "{}".toByteArray(Charsets.UTF_8)
+        )
+        val rows = JSONArray(response.text)
+        return if (rows.length() == 0) null else parsePublicLocationShare(rows.getJSONObject(0))
+    }
+
+    fun revokePublicLocationShare(session: SupabaseSession, shareId: String) {
+        val body = JSONObject()
+            .put("share_id", shareId)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        request(
+            method = "POST",
+            url = "${SupabaseConfig.PROJECT_URL}/rest/v1/rpc/revoke_live_location_share",
+            headers = authHeaders(session) + mapOf("Content-Type" to "application/json"),
+            body = body
+        )
+    }
+
     fun deleteFriend(session: SupabaseSession, friendshipId: String) {
         request(
             method = "DELETE",
@@ -547,6 +590,16 @@ class SupabaseApiClient(
             sortOrder = json.optLong("sort_order", -createdAtMillis),
             createdAtMillis = createdAtMillis,
             updatedAtMillis = parseSupabaseTimestampMillis(json.getString("updated_at"))
+        )
+    }
+
+    private fun parsePublicLocationShare(json: JSONObject): PublicLocationShare {
+        return PublicLocationShare(
+            id = json.getString("id"),
+            createdAtMillis = parseSupabaseTimestampMillis(json.getString("created_at")),
+            expiresAtMillis = json.optString("expires_at")
+                .takeIf { it.isNotBlank() && it != "null" }
+                ?.let(::parseSupabaseTimestampMillis)
         )
     }
 
@@ -765,6 +818,12 @@ data class LocationSharePoint(
     val altitude: Double?,
     val accuracyMeters: Float?,
     val recordedAtMillis: Long
+)
+
+data class PublicLocationShare(
+    val id: String,
+    val createdAtMillis: Long,
+    val expiresAtMillis: Long?
 )
 
 class SupabaseException(

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#fffafe">
+  <title>Геопозиция ICU</title>
+  <link rel="stylesheet" href="./leaflet-1.9.4.css">
+  <style>
+    :root { color-scheme: light; font-family: Arial, Helvetica, sans-serif; }
+    * { box-sizing: border-box; }
+    html, body, #map { width: 100%; height: 100%; margin: 0; }
+    body { overflow: hidden; background: #e7e6e2; color: #1d1b20; }
+    #map { position: fixed; inset: 0; }
+    .panel {
+      position: fixed; z-index: 1000; top: max(16px, env(safe-area-inset-top)); left: 12px; right: 12px;
+      max-width: 520px; margin: 0 auto; padding: 14px 16px; border-radius: 18px;
+      background: rgba(255, 250, 254, .94); box-shadow: 0 3px 12px rgba(29, 27, 32, .16);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    }
+    h1 { margin: 0; font-size: 20px; line-height: 1.25; letter-spacing: 0; }
+    #status { margin-top: 5px; color: #746c7d; font-size: 14px; line-height: 1.35; }
+    #expires { margin-top: 3px; color: #746c7d; font-size: 12px; }
+    #message {
+      display: none; position: fixed; z-index: 1001; left: 16px; right: 16px; bottom: max(20px, env(safe-area-inset-bottom));
+      max-width: 520px; margin: 0 auto; padding: 13px 16px; border-radius: 12px;
+      background: #323033; color: #fff; font-size: 14px; box-shadow: 0 3px 12px rgba(0,0,0,.2);
+    }
+    #recenter {
+      display: none; position: fixed; z-index: 1000; right: 16px; bottom: max(28px, env(safe-area-inset-bottom));
+      width: 52px; height: 52px; border: 0; border-radius: 18px; background: #f0e2ff; color: #59409a;
+      font-size: 25px; line-height: 52px; box-shadow: 0 3px 10px rgba(29,27,32,.2); cursor: pointer;
+    }
+    .latest-marker {
+      width: 24px; height: 24px; border: 3px solid #fff; border-radius: 50%; background: #6b4fb3;
+      box-shadow: 0 2px 8px rgba(29,27,32,.35); position: relative;
+    }
+    .latest-marker::after {
+      content: ''; position: absolute; width: 5px; height: 5px; border-radius: 50%; background: #fff;
+      left: 50%; top: 50%; transform: translate(-50%, -50%);
+    }
+    .leaflet-control-attribution { font-size: 10px; }
+  </style>
+</head>
+<body>
+  <div id="map" aria-label="Карта геопозиции"></div>
+  <section class="panel" aria-live="polite">
+    <h1 id="name">Пользователь ICU</h1>
+    <div id="status">Подключаемся...</div>
+    <div id="expires"></div>
+  </section>
+  <button id="recenter" type="button" aria-label="Вернуться к последней позиции" title="Последняя позиция">⌖</button>
+  <div id="message" role="status"></div>
+  <script src="./leaflet-1.9.4.js"></script>
+  <script src="./app-1.2.0.js"></script>
+</body>
+</html>
