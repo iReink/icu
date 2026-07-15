@@ -1,0 +1,10 @@
+[Unit]
+Description=Reload ICU proxy twice a day
+
+[Timer]
+OnCalendar=*-*-* 04,16:00:00
+Persistent=true
+Unit=icu-proxy-restart.service
+
+[Install]
+WantedBy=timers.target

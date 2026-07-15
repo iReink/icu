@@ -9,5 +9,5 @@ object SupabaseConfig {
     const val FRIEND_INVITE_URL = "$PROJECT_URL/functions/v1/friend-invite"
     const val POINT_SHARE_URL = "$PROJECT_URL/functions/v1/point-share"
     const val TRACK_SHARE_URL = "$PROJECT_URL/functions/v1/track-share"
-    const val LIVE_SHARE_URL = "$PROJECT_URL/functions/v1/live-share/"
+    const val LIVE_SHARE_URL = "https://icu-proxy.185-92-181-109.sslip.io/live-share/"
 }

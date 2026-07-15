@@ -1,0 +1,8 @@
+[Unit]
+Description=Reload ICU proxy nginx configuration
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/root/icu-proxy/restart-icu-proxy.sh

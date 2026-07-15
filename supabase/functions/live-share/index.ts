@@ -1,10 +1,3 @@
-import {
-  APP_JS_BASE64,
-  INDEX_HTML_BASE64,
-  LEAFLET_CSS_BASE64,
-  LEAFLET_JS_BASE64,
-} from "./web_assets.ts";
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type",
@@ -16,10 +9,7 @@ const noStoreHeaders = {
   "Cache-Control": "no-store",
 };
 
-const assetVersion = "1.2.0";
-const bucket = "live-share-web";
-const indexObject = `index-${assetVersion}.html`;
-let assetsReady = false;
+const publicPageUrl = "https://icu-proxy.185-92-181-109.sslip.io/live-share/";
 
 type ShareRow = {
   id: string;
@@ -58,50 +48,6 @@ function adminHeaders(extra: Record<string, string> = {}): HeadersInit {
     Authorization: `Bearer ${key}`,
     ...extra,
   };
-}
-
-function decodeBase64(value: string): Uint8Array {
-  const binary = atob(value);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
-async function uploadAsset(name: string, type: string, base64: string): Promise<void> {
-  const response = await fetch(`${supabaseUrl()}/storage/v1/object/${bucket}/${name}`, {
-    method: "POST",
-    headers: adminHeaders({
-      "Content-Type": type,
-      "x-upsert": "true",
-      "Cache-Control": name.endsWith(".html") ? "no-cache" : "public, max-age=31536000, immutable",
-    }),
-    body: decodeBase64(base64).buffer as ArrayBuffer,
-  });
-  if (!response.ok) {
-    throw new Error(`Could not upload ${name}: ${response.status} ${await response.text()}`);
-  }
-}
-
-async function assetExists(name: string): Promise<boolean> {
-  const response = await fetch(`${supabaseUrl()}/storage/v1/object/${bucket}/${name}`, {
-    method: "HEAD",
-    headers: adminHeaders(),
-  });
-  if (response.ok) return true;
-  if (response.status === 400 || response.status === 404) return false;
-  throw new Error(`Could not inspect ${name}: ${response.status} ${await response.text()}`);
-}
-
-async function ensureWebAssets(): Promise<void> {
-  if (assetsReady) return;
-  const assets = [
-    [indexObject, "text/html", INDEX_HTML_BASE64],
-    [`app-${assetVersion}.js`, "application/javascript", APP_JS_BASE64],
-    ["leaflet-1.9.4.js", "application/javascript", LEAFLET_JS_BASE64],
-    ["leaflet-1.9.4.css", "text/css", LEAFLET_CSS_BASE64],
-  ] as const;
-  await Promise.all(assets.map(async ([name, type, base64]) => {
-    if (!await assetExists(name)) await uploadAsset(name, type, base64);
-  }));
-  assetsReady = true;
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -232,11 +178,9 @@ Deno.serve(async (req) => {
     if (req.method === "POST") return await handleData(req);
     if (req.method !== "GET") return json({ error: "Method not allowed" }, 405);
 
-    await ensureWebAssets();
-    const location = `${supabaseUrl()}/storage/v1/object/public/${bucket}/${indexObject}`;
     return new Response(null, {
       status: 302,
-      headers: { ...noStoreHeaders, Location: location },
+      headers: { ...noStoreHeaders, Location: publicPageUrl },
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);

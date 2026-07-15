@@ -21,7 +21,7 @@
   let visiblePoints = [];
   let tilesUnavailable = false;
 
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  L.tileLayer('/tiles/osm/{z}/{x}/{y}.png', {
     maxZoom: 20,
     attribution: '&copy; OpenStreetMap contributors'
   }).on('tileerror', () => {
@@ -119,7 +119,7 @@
     timer = null;
     statusElement.textContent = text;
     expiresElement.textContent = '';
-    showMessage(text);
+    hideMessage();
   }
 
   async function refresh() {
